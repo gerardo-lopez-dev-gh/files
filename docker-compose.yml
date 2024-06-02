@@ -1,0 +1,48 @@
+version: '3.7'
+
+services:
+  jenkins:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../jenkins_home:/var/jenkins_home
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    networks:
+      jenkins:
+        ipv4_address: 172.21.0.2  # Cambiar la dirección IP
+    extra_hosts:
+      - "nexus:172.21.0.3"  # Configurar el DNS para Nexus
+    user: root
+    entrypoint: >
+      /bin/bash -c "
+      if [ ! -S /var/run/docker.sock ]; then
+        echo 'Docker socket not found, exiting';
+        exit 1;
+      fi;
+      chown jenkins:docker /var/run/docker.sock;
+      /usr/local/bin/jenkins.sh"
+
+  nexus:
+    image: sonatype/nexus3
+    volumes:
+      - nexus-data:/nexus-data
+    ports:
+      - "8081:8081"
+    networks:
+      jenkins:
+        ipv4_address: 172.21.0.3  # Cambiar la dirección IP
+
+networks:
+  jenkins:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.21.0.0/16  # Cambiar la subred
+
+volumes:
+  nexus-data:

@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_REGISTRY = 'http://nexus:8083' // URL del registro de Docker en Nexus usando HTTP
+        DOCKER_IMAGE_PREFIX = 'myapp' // Prefijo para las imágenes Docker
+    }
+
+    stages {
+        stage('Clone or Update Repository') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                        def repoDir = 'example-voting-app'
+                        def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
+
+                        if (fileExists(repoDir)) {
+                            // Si el repositorio ya existe, hacer pull
+                            dir(repoDir) {
+                                sh 'git pull origin main'
+                            }
+                        } else {
+                            // Si el repositorio no existe, clonarlo
+                            sh "git clone ${repoUrl}"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    sh 'docker compose -f example-voting-app/docker-compose.yml build'
+                }
+            }
+        }
+
+        stage('Generate Dynamic Tag') {
+            steps {
+                script {
+                    dir('example-voting-app') {
+                        def commitHash = sh(returnStdout: true, script: 'git log -1 --pretty=format:%h').trim()
+                        def currentDate = sh(returnStdout: true, script: 'date "+%Y%m%d"').trim() // Fecha sin caracteres no permitidos
+                        env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '') // Reemplazo de caracteres no válidos
+                    }
+                }
+            }
+        }
+
+        stage('Push Images to Nexus') {
+            steps {
+                script {
+                    def images = sh(returnStdout: true, script: 'docker compose -f example-voting-app/docker-compose.yml config --services').trim()
+                    images.split().each { service ->
+                        def imageName = "${DOCKER_IMAGE_PREFIX}_${service}"
+                        def taggedImageName = "${imageName}-${DOCKER_IMAGE_TAG}".replaceAll(/[^a-zA-Z0-9._-]/, '') // Reemplazo de caracteres no válidos
+                        withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                            sh '''
+                            echo ${NEXUS_PASSWORD} | docker login -u ${NEXUS_USERNAME} --password-stdin ${DOCKER_REGISTRY}
+                            docker tag ${imageName} ${DOCKER_REGISTRY}/${taggedImageName}
+                            docker push ${DOCKER_REGISTRY}/${taggedImageName}
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
