@@ -12,10 +12,8 @@ services:
       - "8080:8080"
       - "50000:50000"
     networks:
-      jenkins:
-        ipv4_address: 172.21.0.2  # Cambiar la dirección IP
-    extra_hosts:
-      - "nexus:172.21.0.3"  # Configurar el DNS para Nexus
+      default:
+        ipv4_address: 172.21.0.2
     user: root
     entrypoint: >
       /bin/bash -c "
@@ -32,17 +30,18 @@ services:
       - nexus-data:/nexus-data
     ports:
       - "8081:8081"
+      - "8082:8082"
     networks:
-      jenkins:
-        ipv4_address: 172.21.0.3  # Cambiar la dirección IP
+      default:
+        ipv4_address: 172.21.0.3
 
 networks:
-  jenkins:
+  default:
     driver: bridge
     ipam:
       driver: default
       config:
-        - subnet: 172.21.0.0/16  # Cambiar la subred
+        - subnet: 172.21.0.0/16
 
 volumes:
   nexus-data:
