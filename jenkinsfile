@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_REGISTRY = '172.21.0.3:8082 // Registro de Docker en Nexus usando el puerto 8082
+        DOCKER_REGISTRY = '172.21.0.3:8082' // Registro de Docker en Nexus usando el puerto 8082
         DOCKER_IMAGE_PREFIX = 'example-voting-app' // Prefijo para las imágenes Docker
     }
 
@@ -70,7 +70,7 @@ pipeline {
                         def fullImageName = imageList.split('\n').find { it.contains(imageName) }
 
                         if (fullImageName) {
-                            def taggedImageName = "172.21.0.3:8083/${imageName}:${DOCKER_IMAGE_TAG}".replaceAll(/[^a-zA-Z0-9._-]/, '')
+                            def taggedImageName = "172.21.0.3:8082/${imageName}:${DOCKER_IMAGE_TAG}"
                             taggedImages << taggedImageName
 
                             echo "Tagging image: ${fullImageName} as ${taggedImageName}"
@@ -98,7 +98,7 @@ pipeline {
                 script {
                     def services = ['vote', 'result', 'worker']
                     services.each { service ->
-                        def taggedImageName = "172.21.0.3:8083/${DOCKER_IMAGE_PREFIX}-${service}:${DOCKER_IMAGE_TAG}"
+                        def taggedImageName = "172.21.0.3:8082/${DOCKER_IMAGE_PREFIX}-${service}:${DOCKER_IMAGE_TAG}"
 
                         echo "Deploying image: ${taggedImageName}"
 
