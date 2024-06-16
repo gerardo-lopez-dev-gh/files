@@ -11,6 +11,7 @@ services:
     ports:
       - "8080:8080"
       - "5000:5000"
+      - "5001:5001"
     networks:
       default:
         ipv4_address: 172.21.0.2
@@ -31,7 +32,6 @@ services:
     ports:
       - "8081:8081"
       - "8082:8082"
-      - "5001:5001"
     networks:
       default:
         ipv4_address: 172.21.0.3
