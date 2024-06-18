@@ -29,16 +29,18 @@ pipeline {
         stage('Build Docker Images') {
             steps {
                 script {
-                    sh 'docker compose -f example-voting-app/docker-compose.yml build'
-                }
-            }
-        }
+                    dir('example-voting-app') {
+                        // Definir los servicios y sus directorios Dockerfile correspondientes
+                        def services = [
+                            [name: 'vote', dir: 'vote'],
+                            [name: 'result', dir: 'result'],
+                            [name: 'worker', dir: 'worker'],
+                        ]
 
-        stage('List Docker Images') {
-            steps {
-                script {
-                    // Lista todas las imágenes disponibles para verificar los nombres correctos
-                    sh 'docker images'
+                        services.each { service ->
+                            sh "docker build -t ${DOCKER_IMAGE_PREFIX}-${service.name}:latest -f ${service.dir}/Dockerfile ${service.dir}"
+                        }
+                    }
                 }
             }
         }
@@ -58,26 +60,16 @@ pipeline {
         stage('Push Images to Nexus') {
             steps {
                 script {
-                    // Lista las imágenes disponibles para verificar los nombres correctos
-                    def imageList = sh(returnStdout: true, script: 'docker images --format "{{.Repository}}:{{.Tag}}"').trim()
-                    echo "Available images:\n${imageList}"
-
-                    def services = ['vote', 'result', 'worker']
+                    def services = ['vote', 'result', 'worker', 'redis', 'db']
                     def taggedImages = []
 
                     services.each { service ->
                         def imageName = "${DOCKER_IMAGE_PREFIX}-${service}"
-                        def fullImageName = imageList.split('\n').find { it.contains(imageName) }
+                        def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
+                        taggedImages << taggedImageName
 
-                        if (fullImageName) {
-                            def taggedImageName = "172.21.0.3:8082/${imageName}:${DOCKER_IMAGE_TAG}"
-                            taggedImages << taggedImageName
-
-                            echo "Tagging image: ${fullImageName} as ${taggedImageName}"
-                            sh "docker tag ${fullImageName} ${taggedImageName}"
-                        } else {
-                            error "Image ${imageName} not found in the available images"
-                        }
+                        echo "Tagging image: ${imageName}:latest as ${taggedImageName}"
+                        sh "docker tag ${imageName}:latest ${taggedImageName}"
                     }
 
                     echo "Logging into Docker Registry at http://${DOCKER_REGISTRY}"
@@ -93,20 +85,32 @@ pipeline {
             }
         }
 
+        stage('Ensure Healthcheck Scripts') {
+            steps {
+                script {
+                    sh '''
+                    chmod +x example-voting-app/healthchecks/redis.sh
+                    chmod +x example-voting-app/healthchecks/postgres.sh
+                    '''
+                }
+            }
+        }
+
+        stage('Stop Existing Containers') {
+            steps {
+                script {
+                    sh 'docker compose -f example-voting-app/docker-compose.images.yml down'
+                }
+            }
+        }
+
         stage('Deploy Images from Nexus') {
             steps {
                 script {
-                    def services = ['vote', 'result', 'worker']
-                    services.each { service ->
-                        def taggedImageName = "172.21.0.3:8082/${DOCKER_IMAGE_PREFIX}-${service}:${DOCKER_IMAGE_TAG}"
-
-                        echo "Deploying image: ${taggedImageName}"
-
-                        sh """
-                        docker pull ${taggedImageName}
-                        docker run -d --name ${service} ${taggedImageName}
-                        """
-                    }
+                    sh """
+                    docker compose -f example-voting-app/docker-compose.images.yml pull
+                    docker compose -f example-voting-app/docker-compose.images.yml up -d
+                    """
                 }
             }
         }
