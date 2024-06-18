@@ -4,6 +4,7 @@ pipeline {
     environment {
         DOCKER_REGISTRY = '172.21.0.3:8082' // Registro de Docker en Nexus usando el puerto 8082
         DOCKER_IMAGE_PREFIX = 'example-voting-app' // Prefijo para las imágenes Docker
+        DEPLOY_LOG = 'deploy_log.txt' // Archivo para registrar las versiones desplegadas
     }
 
     stages {
@@ -30,7 +31,6 @@ pipeline {
             steps {
                 script {
                     dir('example-voting-app') {
-                        // Definir los servicios y sus directorios Dockerfile correspondientes
                         def services = [
                             [name: 'vote', dir: 'vote'],
                             [name: 'result', dir: 'result'],
@@ -86,6 +86,9 @@ pipeline {
                         echo "Pushing image to registry: ${taggedImageName}"
                         sh "docker push ${taggedImageName}"
                     }
+
+                    // Registrar la versión implementada
+                    sh "echo ${DOCKER_IMAGE_TAG} >> ${DEPLOY_LOG}"
                 }
             }
             post {
@@ -129,7 +132,6 @@ pipeline {
         stage('Clean Up Old Images') {
             steps {
                 script {
-                    // Hacer docker-compose down y eliminar todas las imágenes de la app example-voting-app
                     sh 'docker compose -f example-voting-app/docker-compose.images.yml down'
                     def services = ['vote', 'result', 'worker']
                     services.each { service ->
@@ -142,6 +144,33 @@ pipeline {
         stage('Start New Deployment') {
             steps {
                 script {
+                    sh 'docker compose -f example-voting-app/docker-compose.images.yml up -d'
+                }
+            }
+            post {
+                failure {
+                    error('Deployment failed. Initiating rollback...')
+                }
+            }
+        }
+
+        stage('Rollback to Previous Version') {
+            when {
+                expression { currentBuild.result == 'FAILURE' }
+            }
+            steps {
+                script {
+                    // Leer la última versión desplegada
+                    def lastTag = sh(returnStdout: true, script: "tail -2 ${DEPLOY_LOG} | head -1").trim()
+                    echo "Rolling back to previous version: ${lastTag}"
+
+                    def composeFile = readFile 'example-voting-app/docker-compose.images.yml'
+                    def updatedComposeFile = composeFile.replaceAll(/example-voting-app-[a-z]+:\w+/, { match -> 
+                        def service = match.split(':')[0]
+                        return "${service}:${lastTag}"
+                    })
+                    writeFile file: 'example-voting-app/docker-compose.images.yml', text: updatedComposeFile
+
                     sh 'docker compose -f example-voting-app/docker-compose.images.yml up -d'
                 }
             }
