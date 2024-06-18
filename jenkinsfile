@@ -104,6 +104,18 @@ pipeline {
             }
         }
 
+        stage('Update Docker Compose for Deployment') {
+            steps {
+                script {
+                    def composeFile = readFile 'example-voting-app/docker-compose.images.yml'
+                    def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:latest', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-result:latest', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-worker:latest', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
+                    writeFile file: 'example-voting-app/docker-compose.images.yml', text: updatedComposeFile
+                }
+            }
+        }
+
         stage('Deploy Images from Nexus') {
             steps {
                 script {
