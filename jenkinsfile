@@ -13,7 +13,7 @@ pipeline {
         stage('Clone or Update App Repository') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'github-pat-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                         def repoDir = 'example-voting-app'
                         def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
 
@@ -37,7 +37,7 @@ pipeline {
         stage('Clone or Update Docker Files Repository') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'github-pat-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                         def repoDir = DOCKER_FILES_DIR
                         def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
 
