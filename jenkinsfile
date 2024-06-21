@@ -13,16 +13,21 @@ pipeline {
         stage('Clone or Update App Repository') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    withCredentials([usernamePassword(credentialsId: 'github-pat-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                         def repoDir = 'example-voting-app'
                         def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
 
                         if (fileExists(repoDir)) {
-                            dir(repoDir) {
-                                sh 'git pull origin main'
+                            if (fileExists("${repoDir}/.git")) {
+                                dir(repoDir) {
+                                    sh 'git pull origin main'
+                                }
+                            } else {
+                                sh "rm -rf ${repoDir}"
+                                sh "git clone ${repoUrl}"
                             }
                         } else {
-                            sh "git clone https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
+                            sh "git clone ${repoUrl}"
                         }
                     }
                 }
@@ -32,13 +37,18 @@ pipeline {
         stage('Clone or Update Docker Files Repository') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    withCredentials([usernamePassword(credentialsId: 'github-pat-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                         def repoDir = DOCKER_FILES_DIR
                         def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
 
                         if (fileExists(repoDir)) {
-                            dir(repoDir) {
-                                sh 'git pull origin main'
+                            if (fileExists("${repoDir}/.git")) {
+                                dir(repoDir) {
+                                    sh 'git pull origin main'
+                                }
+                            } else {
+                                sh "rm -rf ${repoDir}"
+                                sh "git clone ${repoUrl}"
                             }
                         } else {
                             sh "git clone ${repoUrl}"
@@ -133,7 +143,10 @@ pipeline {
         stage('Stop Existing Containers') {
             steps {
                 script {
-                    sh 'docker compose -f docker-files/docker-compose.yml down'
+                    def containers = sh(returnStdout: true, script: "docker ps -a --filter 'name=example-' --format '{{.ID}}'").trim()
+                    if (containers) {
+                        sh "docker rm -f ${containers}"
+                    }
                 }
             }
         }
