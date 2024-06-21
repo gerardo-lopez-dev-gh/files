@@ -2,8 +2,9 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_REGISTRY = 'nexus:8082' // URL del registro de Docker en Nexus
-        DOCKER_IMAGE_PREFIX = 'myapp' // Prefijo para las imágenes Docker
+        DOCKER_REGISTRY = '172.21.0.3:8082' // Registro de Docker en Nexus usando el puerto 8082
+        DOCKER_IMAGE_PREFIX = 'example-voting-app' // Prefijo para las imágenes Docker
+        DEPLOY_LOG = 'deploy_log.txt' // Archivo para registrar las versiones desplegadas
     }
 
     stages {
@@ -15,12 +16,10 @@ pipeline {
                         def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
 
                         if (fileExists(repoDir)) {
-                            // Si el repositorio ya existe, hacer pull
                             dir(repoDir) {
                                 sh 'git pull origin main'
                             }
                         } else {
-                            // Si el repositorio no existe, clonarlo
                             sh "git clone ${repoUrl}"
                         }
                     }
@@ -31,7 +30,22 @@ pipeline {
         stage('Build Docker Images') {
             steps {
                 script {
-                    sh 'docker compose -f example-voting-app/docker-compose.yml build'
+                    dir('example-voting-app') {
+                        def services = [
+                            [name: 'vote', dir: 'vote'],
+                            [name: 'result', dir: 'result'],
+                            [name: 'worker', dir: 'worker'],
+                        ]
+
+                        services.each { service ->
+                            sh "docker build -t ${DOCKER_IMAGE_PREFIX}-${service.name}:latest -f ${service.dir}/Dockerfile ${service.dir}"
+                        }
+                    }
+                }
+            }
+            post {
+                failure {
+                    error('Error in building one of the Docker images.')
                 }
             }
         }
@@ -39,9 +53,11 @@ pipeline {
         stage('Generate Dynamic Tag') {
             steps {
                 script {
-                    def commitHash = sh(returnStdout: true, script: 'git log -1 --pretty=format:%h').trim()
-                    def currentDate = sh(returnStdout: true, script: 'date "+%Y%m%d"').trim() // Fecha sin caracteres no permitidos
-                    env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '') // Reemplazo de caracteres no válidos
+                    dir('example-voting-app') {
+                        def commitHash = sh(returnStdout: true, script: 'git log -1 --pretty=format:%h').trim()
+                        def currentDate = sh(returnStdout: true, script: 'date "+%Y%m%d"').trim()
+                        env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
+                    }
                 }
             }
         }
@@ -49,26 +65,91 @@ pipeline {
         stage('Push Images to Nexus') {
             steps {
                 script {
-                    def images = sh(returnStdout: true, script: 'docker-compose -f example-voting-app/docker-compose.yml config --services').trim()
-                    images.split().each { service ->
-                        def imageName = "${DOCKER_IMAGE_PREFIX}_${service}"
-                        def taggedImageName = "${imageName}-${DOCKER_IMAGE_TAG}".replaceAll(/[^a-zA-Z0-9._-]/, '') // Reemplazo de caracteres no válidos
-                        withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
-                            sh '''
-                            echo ${NEXUS_PASSWORD} | docker login -u ${NEXUS_USERNAME} --password-stdin ${DOCKER_REGISTRY}
-                            docker tag ${imageName} ${DOCKER_REGISTRY}/${taggedImageName}
-                            docker push ${DOCKER_REGISTRY}/${taggedImageName}
-                            '''
-                        }
+                    def services = ['vote', 'result', 'worker']
+                    def taggedImages = []
+
+                    services.each { service ->
+                        def imageName = "${DOCKER_IMAGE_PREFIX}-${service}"
+                        def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
+                        taggedImages << taggedImageName
+
+                        echo "Tagging image: ${imageName}:latest as ${taggedImageName}"
+                        sh "docker tag ${imageName}:latest ${taggedImageName}"
+                    }
+
+                    echo "Logging into Docker Registry at http://${DOCKER_REGISTRY}"
+                    withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                        sh 'echo ${NEXUS_PASSWORD} | docker login -u ${NEXUS_USERNAME} --password-stdin http://${DOCKER_REGISTRY}'
+                    }
+
+                    taggedImages.each { taggedImageName ->
+                        echo "Pushing image to registry: ${taggedImageName}"
+                        sh "docker push ${taggedImageName}"
+                    }
+
+                    // Registrar la versión implementada
+                    sh "echo ${DOCKER_IMAGE_TAG} >> ${DEPLOY_LOG}"
+                }
+            }
+            post {
+                failure {
+                    error('Error in pushing images to Nexus.')
+                }
+            }
+        }
+
+        stage('Ensure Healthcheck Scripts') {
+            steps {
+                script {
+                    sh '''
+                    chmod +x example-voting-app/healthchecks/redis.sh
+                    chmod +x example-voting-app/healthchecks/postgres.sh
+                    '''
+                }
+            }
+        }
+
+        stage('Stop Existing Containers') {
+            steps {
+                script {
+                    sh 'docker compose -f example-voting-app/docker-compose.images.yml down'
+                }
+            }
+        }
+
+        stage('Update Docker Compose for Deployment') {
+            steps {
+                script {
+                    def composeFile = readFile 'example-voting-app/docker-compose.images.yml'
+                    def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:latest', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-result:latest', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-worker:latest', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
+                    writeFile file: 'example-voting-app/docker-compose.images.yml', text: updatedComposeFile
+                }
+            }
+        }
+
+        stage('Clean Up Old Images') {
+            steps {
+                script {
+                    sh 'docker compose -f example-voting-app/docker-compose.images.yml down'
+                    def services = ['vote', 'result', 'worker']
+                    services.each { service ->
+                        sh "docker images ${DOCKER_REGISTRY}/example-voting-app-${service} --format '{{.ID}}' | xargs docker rmi -f || true"
                     }
                 }
             }
         }
 
-        stage('Deploy Containers') {
+        stage('Start New Deployment') {
             steps {
                 script {
-                    sh 'docker compose -f example-voting-app/docker-compose.yml up -d'
+                    sh 'docker compose -f example-voting-app/docker-compose.images.yml up -d'
+                }
+            }
+            post {
+                failure {
+                    error('Deployment failed.')
                 }
             }
         }

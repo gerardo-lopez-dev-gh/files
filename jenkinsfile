@@ -5,15 +5,36 @@ pipeline {
         DOCKER_REGISTRY = '172.21.0.3:8082' // Registro de Docker en Nexus usando el puerto 8082
         DOCKER_IMAGE_PREFIX = 'example-voting-app' // Prefijo para las imágenes Docker
         DEPLOY_LOG = 'deploy_log.txt' // Archivo para registrar las versiones desplegadas
+        DOCKER_FILES_REPO = 'https://github.com/gerardo-lopez-dev-gh/docker-files.git' // Repo de Dockerfiles
+        DOCKER_FILES_DIR = 'docker-files' // Directorio para el repo de Dockerfiles
     }
 
     stages {
-        stage('Clone or Update Repository') {
+        stage('Clone or Update App Repository') {
             steps {
                 script {
                     withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                         def repoDir = 'example-voting-app'
                         def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
+
+                        if (fileExists(repoDir)) {
+                            dir(repoDir) {
+                                sh 'git pull origin main'
+                            }
+                        } else {
+                            sh "git clone https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Clone or Update Docker Files Repository') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                        def repoDir = DOCKER_FILES_DIR
+                        def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
 
                         if (fileExists(repoDir)) {
                             dir(repoDir) {
@@ -79,7 +100,7 @@ pipeline {
 
                     echo "Logging into Docker Registry at http://${DOCKER_REGISTRY}"
                     withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
-                        sh 'echo ${NEXUS_PASSWORD} | docker login -u ${NEXUS_USERNAME} --password-stdin http://${DOCKER_REGISTRY}'
+                        sh 'echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}'
                     }
 
                     taggedImages.each { taggedImageName ->
@@ -112,19 +133,21 @@ pipeline {
         stage('Stop Existing Containers') {
             steps {
                 script {
-                    sh 'docker compose -f example-voting-app/docker-compose.images.yml down'
+                    sh 'docker compose -f docker-files/docker-compose.yml down'
                 }
             }
         }
 
-        stage('Update Docker Compose for Deployment') {
+        stage('Update Docker Compose') {
             steps {
                 script {
-                    def composeFile = readFile 'example-voting-app/docker-compose.images.yml'
-                    def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:latest', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-result:latest', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-worker:latest', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
-                    writeFile file: 'example-voting-app/docker-compose.images.yml', text: updatedComposeFile
+                    def composeFilePath = "${DOCKER_FILES_DIR}/docker-compose.yml"
+                    
+                    def composeFile = readFile composeFilePath
+                    def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:[^\\s"\']+', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-result:[^\\s"\']+', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-worker:[^\\s"\']+', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
+                    writeFile file: composeFilePath, text: updatedComposeFile
                 }
             }
         }
@@ -132,7 +155,7 @@ pipeline {
         stage('Clean Up Old Images') {
             steps {
                 script {
-                    sh 'docker compose -f example-voting-app/docker-compose.images.yml down'
+                    sh 'docker compose -f docker-files/docker-compose.yml down'
                     def services = ['vote', 'result', 'worker']
                     services.each { service ->
                         sh "docker images ${DOCKER_REGISTRY}/example-voting-app-${service} --format '{{.ID}}' | xargs docker rmi -f || true"
@@ -144,34 +167,36 @@ pipeline {
         stage('Start New Deployment') {
             steps {
                 script {
-                    sh 'docker compose -f example-voting-app/docker-compose.images.yml up -d'
-                }
-            }
-            post {
-                failure {
-                    error('Deployment failed. Initiating rollback...')
+                    sh "docker compose -f ${DOCKER_FILES_DIR}/docker-compose.yml up -d"
                 }
             }
         }
 
-        stage('Rollback to Previous Version') {
+        stage('Commit and Push Changes') {
             when {
-                expression { currentBuild.result == 'FAILURE' }
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
             }
             steps {
                 script {
-                    // Leer la última versión desplegada
-                    def lastTag = sh(returnStdout: true, script: "tail -2 ${DEPLOY_LOG} | head -1").trim()
-                    echo "Rolling back to previous version: ${lastTag}"
-
-                    def composeFile = readFile 'example-voting-app/docker-compose.images.yml'
-                    def updatedComposeFile = composeFile.replaceAll(/example-voting-app-[a-z]+:\w+/, { match -> 
-                        def service = match.split(':')[0]
-                        return "${service}:${lastTag}"
-                    })
-                    writeFile file: 'example-voting-app/docker-compose.images.yml', text: updatedComposeFile
-
-                    sh 'docker compose -f example-voting-app/docker-compose.images.yml up -d'
+                    dir(DOCKER_FILES_DIR) {
+                        sh "git add docker-compose.yml"
+                        def commitMessage = "Updated docker-compose.yml with tag ${DOCKER_IMAGE_TAG}"
+                        sh "git commit -m '${commitMessage}'"
+                        withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                            sh 'git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git main'
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post {
+        failure {
+            script {
+                dir(DOCKER_FILES_DIR) {
+                    echo 'Deployment failed. Reverting docker-compose.yml changes...'
+                    sh 'git reset --hard HEAD'
+                    sh "docker compose -f docker-files/docker-compose.yml up -d"
                 }
             }
         }
