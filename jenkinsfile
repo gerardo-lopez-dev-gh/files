@@ -162,9 +162,9 @@ pipeline {
                     def composeFile = readFile composeFilePath
                     echo "Contenido original de docker-compose.yml:\n${composeFile}"
                     
-                    def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:[^\\s"\']+', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-result:[^\\s"\']+', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-worker:[^\\s"\']+', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
+                    def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:[^\\s\'"]+', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-result:[^\\s\'"]+', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
+                                                        .replaceAll('example-voting-app-worker:[^\\s\'"]+', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
                     
                     echo "Contenido actualizado de docker-compose.yml:\n${updatedComposeFile}"
                     writeFile file: composeFilePath, text: updatedComposeFile
