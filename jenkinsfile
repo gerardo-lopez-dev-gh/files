@@ -65,8 +65,8 @@ pipeline {
                         def services = [
                             [name: 'vote', dir: 'vote'],
                             [name: 'result', dir: 'result'],
-                            [name: 'worker', dir: 'worker'],
-                            [name: 'seed-data', dir: 'seed-data']
+                            [name: 'worker', dir: 'worker']
+                          
                         ]
 
                         services.each { service ->
@@ -97,7 +97,7 @@ pipeline {
         stage('Push Images to Nexus') {
             steps {
                 script {
-                    def services = ['vote', 'result', 'worker', 'seed-data']
+                    def services = ['vote', 'result', 'worker']
                     def taggedImages = []
 
                     services.each { service ->
@@ -167,7 +167,7 @@ pipeline {
                     def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:.*', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
                                                         .replaceAll('example-voting-app-result:.*', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
                                                         .replaceAll('example-voting-app-worker:.*', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-seed-data:.*', "example-voting-app-seed-data:${DOCKER_IMAGE_TAG}")
+                                                       
                     
                     echo "Contenido actualizado de docker-compose.yml:\n${updatedComposeFile}"
                     writeFile file: composeFilePath, text: updatedComposeFile
@@ -178,7 +178,7 @@ pipeline {
         stage('Clean Up Old Images') {
             steps {
                 script {
-                    def services = ['vote', 'result', 'worker', 'seed-data']
+                    def services = ['vote', 'result', 'worker']
                     services.each { service ->
                         sh "docker images ${DOCKER_REGISTRY}/example-voting-app-${service} --format '{{.ID}}' | xargs docker rmi -f || true"
                     }
