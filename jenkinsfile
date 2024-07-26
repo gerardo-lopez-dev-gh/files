@@ -200,18 +200,33 @@ pipeline {
             }
             steps {
                 script {
-                    dir(DOCKER_FILES_DIR) {
-                        sh "git add docker-compose.yml"
-                        def commitMessage = "Updated docker-compose.yml with tag ${DOCKER_IMAGE_TAG}"
-                        sh "git commit -m '${commitMessage}'"
-                        withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                            sh 'git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git main'
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                        def repoDir = DOCKER_FILES_DIR
+                        def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
+
+                        dir(repoDir) {
+                            echo "pwd: ${pwd()}"
+                            sh "git add docker-compose.yml"
+                            def commitMessage = "Updated docker-compose.yml with tag ${DOCKER_IMAGE_TAG}"
+
+                            // Verificar si el origen remoto ya está configurado
+                            def remoteUrl = sh(returnStdout: true, script: 'git config --get remote.origin.url').trim()
+                            if (!remoteUrl) {
+                                sh "git remote add origin ${repoUrl}"
+                            } else {
+                                sh "git remote set-url origin ${repoUrl}"
+                            }
+
+                            // Forzar la actualización del archivo y la detección de cambios
+                            sh "git add -A"
+                            sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
+                            sh "git push"
                         }
                     }
                 }
             }
         }
-    }
+    }   
     post {
         failure {
             script {
