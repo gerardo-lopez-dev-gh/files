@@ -2,58 +2,21 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_REGISTRY = '172.21.0.3:8082' // Registro de Docker en Nexus usando el puerto 8082
-        DOCKER_IMAGE_PREFIX = 'example-voting-app' // Prefijo para las imágenes Docker
-        DEPLOY_LOG = 'deploy_log.txt' // Archivo para registrar las versiones desplegadas
-        DOCKER_FILES_REPO = 'https://github.com/gerardo-lopez-dev-gh/docker-files.git' // Repo de Dockerfiles
-        DOCKER_FILES_DIR = 'docker-files' // Directorio para el repo de Dockerfiles
+        DOCKER_REGISTRY = '172.21.0.3:8082'
+        DOCKER_IMAGE_PREFIX = 'example-voting-app'
+        DEPLOY_LOG = 'deploy_log.txt'
+        DOCKER_FILES_REPO = 'https://github.com/gerardo-lopez-dev-gh/docker-files.git'
+        DOCKER_FILES_DIR = 'docker-files'
+        APP_REPO = 'https://github.com/gerardo-lopez-dev-gh/example-voting-app.git'
+        APP_DIR = 'example-voting-app'
     }
 
     stages {
-        stage('Clone or Update App Repository') {
+        stage('Prepare Repositories') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                        def repoDir = 'example-voting-app'
-                        def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/example-voting-app.git"
-
-                        if (fileExists(repoDir)) {
-                            if (fileExists("${repoDir}/.git")) {
-                                dir(repoDir) {
-                                    sh 'git pull origin main'
-                                }
-                            } else {
-                                sh "rm -rf ${repoDir}"
-                                sh "git clone ${repoUrl}"
-                            }
-                        } else {
-                            sh "git clone ${repoUrl}"
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Clone or Update Docker Files Repository') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                        def repoDir = DOCKER_FILES_DIR
-                        def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
-
-                        if (fileExists(repoDir)) {
-                            if (fileExists("${repoDir}/.git")) {
-                                dir(repoDir) {
-                                    sh 'git pull origin main'
-                                }
-                            } else {
-                                sh "rm -rf ${repoDir}"
-                                sh "git clone ${repoUrl}"
-                            }
-                        } else {
-                            sh "git clone ${repoUrl}"
-                        }
-                    }
+                    cloneOrUpdateRepo(APP_DIR, APP_REPO)
+                    cloneOrUpdateRepo(DOCKER_FILES_DIR, DOCKER_FILES_REPO)
                 }
             }
         }
@@ -61,135 +24,37 @@ pipeline {
         stage('Build Docker Images') {
             steps {
                 script {
-                    dir('example-voting-app') {
-                        def services = [
-                            [name: 'vote', dir: 'vote'],
-                            [name: 'result', dir: 'result'],
-                            [name: 'worker', dir: 'worker'],
-                            [name: 'seed-data', dir: 'seed-data']
-                        ]
-
-                        services.each { service ->
-                            sh "docker build -t ${DOCKER_IMAGE_PREFIX}-${service.name}:latest -f ${service.dir}/Dockerfile ${service.dir}"
-                        }
-                    }
-                }
-            }
-            post {
-                failure {
-                    error('Error in building one of the Docker images.')
-                }
-            }
-        }
-
-        stage('Generate Dynamic Tag') {
-            steps {
-                script {
-                    dir('example-voting-app') {
-                        def commitHash = sh(returnStdout: true, script: 'git log -1 --pretty=format:%h').trim()
-                        def currentDate = sh(returnStdout: true, script: 'date "+%Y%m%d"').trim()
-                        env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
-                    }
-                }
-            }
-        }
-
-        stage('Push Images to Nexus') {
-            steps {
-                script {
                     def services = ['vote', 'result', 'worker', 'seed-data']
-                    def taggedImages = []
-
                     services.each { service ->
-                        def imageName = "${DOCKER_IMAGE_PREFIX}-${service}"
-                        def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
-                        taggedImages << taggedImageName
+                        buildDockerImage(service, "${APP_DIR}/${service}")
+                    }
+                }
+            }
+        }
 
-                        echo "Tagging image: ${imageName}:latest as ${taggedImageName}"
-                        sh "docker tag ${imageName}:latest ${taggedImageName}"
+        stage('Generate and Push Images with Tag') {
+            steps {
+                script {
+                    def commitHash = getGitCommitHash(APP_DIR)
+                    def currentDate = getCurrentDate()
+                    env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
+
+                    def services = ['vote', 'result', 'worker', 'seed-data']
+                    services.each { service ->
+                        tagAndPushDockerImage(service)
                     }
 
-                    echo "Logging into Docker Registry at http://${DOCKER_REGISTRY}"
-                    withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
-                        sh 'echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}'
-                    }
-
-                    taggedImages.each { taggedImageName ->
-                        echo "Pushing image to registry: ${taggedImageName}"
-                        sh "docker push ${taggedImageName}"
-                    }
-
-                    // Registrar la versión implementada
                     sh "echo ${DOCKER_IMAGE_TAG} >> ${DEPLOY_LOG}"
                 }
             }
-            post {
-                failure {
-                    error('Error in pushing images to Nexus.')
-                }
-            }
         }
 
-        stage('Ensure Healthcheck Scripts') {
+        stage('Deployment') {
             steps {
                 script {
-                    sh '''
-                    chmod +x example-voting-app/healthchecks/redis.sh
-                    chmod +x example-voting-app/healthchecks/postgres.sh
-                    '''
-                }
-            }
-        }
-
-        stage('Stop Existing Containers') {
-            steps {
-                script {
-                    def containers = sh(returnStdout: true, script: "docker ps -a --filter 'name=example-' --format '{{.ID}}'").trim()
-                    if (containers) {
-                        containers.split('\n').each { container ->
-                            sh "docker rm -f ${container}"
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Update Docker Compose') {
-            steps {
-                script {
-                    def composeFilePath = "${DOCKER_FILES_DIR}/docker-compose.yml"
-                    
-                    // Leer el archivo y verificar su contenido antes y después de la actualización
-                    def composeFile = readFile composeFilePath
-                    echo "Contenido original de docker-compose.yml:\n${composeFile}"
-                    
-                    // Actualizar los tags
-                    def updatedComposeFile = composeFile.replaceAll('example-voting-app-vote:.*', "example-voting-app-vote:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-result:.*', "example-voting-app-result:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-worker:.*', "example-voting-app-worker:${DOCKER_IMAGE_TAG}")
-                                                        .replaceAll('example-voting-app-seed-data:.*', "example-voting-app-seed-data:${DOCKER_IMAGE_TAG}")
-                    
-                    echo "Contenido actualizado de docker-compose.yml:\n${updatedComposeFile}"
-                    writeFile file: composeFilePath, text: updatedComposeFile
-                }
-            }
-        }
-
-        stage('Clean Up Old Images') {
-            steps {
-                script {
-                    def services = ['vote', 'result', 'worker', 'seed-data']
-                    services.each { service ->
-                        sh "docker images ${DOCKER_REGISTRY}/example-voting-app-${service} --format '{{.ID}}' | xargs docker rmi -f || true"
-                    }
-                }
-            }
-        }
-
-        stage('Start New Deployment') {
-            steps {
-                script {
-                    sh "docker compose -f ${DOCKER_FILES_DIR}/docker-compose.yml up -d"
+                    updateDockerComposeTags()
+                    stopExistingContainers()
+                    startNewDeployment()
                 }
             }
         }
@@ -200,42 +65,101 @@ pipeline {
             }
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                        def repoDir = DOCKER_FILES_DIR
-                        def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
-
-                        dir(repoDir) {
-                            echo "pwd: ${pwd()}"
-                            sh "git add docker-compose.yml"
-                            def commitMessage = "Updated docker-compose.yml with tag ${DOCKER_IMAGE_TAG}"
-
-                            // Verificar si el origen remoto ya está configurado
-                            def remoteUrl = sh(returnStdout: true, script: 'git config --get remote.origin.url').trim()
-                            if (!remoteUrl) {
-                                sh "git remote add origin ${repoUrl}"
-                            } else {
-                                sh "git remote set-url origin ${repoUrl}"
-                            }
-
-                            // Forzar la actualización del archivo y la detección de cambios
-                            sh "git add -A"
-                            sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
-                            sh "git push"
-                        }
-                    }
+                    commitAndPushChanges(DOCKER_FILES_DIR, 'docker-compose.yml', "Updated docker-compose.yml with tag ${DOCKER_IMAGE_TAG}")
                 }
             }
         }
-    }   
+    }
+
     post {
         failure {
             script {
-                dir(DOCKER_FILES_DIR) {
-                    echo 'Deployment failed. Reverting docker-compose.yml changes...'
-                    sh 'git reset --hard HEAD'
-                    sh "docker compose -f docker-files/docker-compose.yml up -d"
-                }
+                rollbackChanges(DOCKER_FILES_DIR)
             }
         }
+    }
+}
+
+// Helper Functions
+def cloneOrUpdateRepo(repoDir, repoUrl) {
+    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+        if (fileExists(repoDir)) {
+            if (fileExists("${repoDir}/.git")) {
+                dir(repoDir) {
+                    sh 'git pull origin main'
+                }
+            } else {
+                sh "rm -rf ${repoDir}"
+                sh "git clone ${repoUrl}"
+            }
+        } else {
+            sh "git clone ${repoUrl}"
+        }
+    }
+}
+
+def buildDockerImage(service, dir) {
+    sh "docker build -t ${DOCKER_IMAGE_PREFIX}-${service}:latest -f ${dir}/Dockerfile ${dir}"
+}
+
+def getGitCommitHash(repoDir) {
+    return sh(returnStdout: true, script: "cd ${repoDir} && git log -1 --pretty=format:%h").trim()
+}
+
+def getCurrentDate() {
+    return sh(returnStdout: true, script: 'date "+%Y%m%d"').trim()
+}
+
+def tagAndPushDockerImage(service) {
+    def imageName = "${DOCKER_IMAGE_PREFIX}-${service}"
+    def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
+    echo "Tagging and pushing image: ${taggedImageName}"
+    
+    sh "docker tag ${imageName}:latest ${taggedImageName}"
+    
+    withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+        sh "echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}"
+        sh "docker push ${taggedImageName}"
+    }
+}
+
+def updateDockerComposeTags() {
+    def composeFilePath = "${DOCKER_FILES_DIR}/docker-compose.yml"
+    def composeFile = readFile composeFilePath
+    def updatedComposeFile = composeFile.replaceAll('example-voting-app-\\w+:.*', { match ->
+        def serviceName = match.split(':')[0]
+        return "${serviceName}:${DOCKER_IMAGE_TAG}"
+    })
+    writeFile file: composeFilePath, text: updatedComposeFile
+}
+
+def stopExistingContainers() {
+    def containers = sh(returnStdout: true, script: "docker ps -a --filter 'name=example-' --format '{{.ID}}'").trim()
+    if (containers) {
+        containers.split('\n').each { container ->
+            sh "docker rm -f ${container}"
+        }
+    }
+}
+
+def startNewDeployment() {
+    sh "docker compose -f ${DOCKER_FILES_DIR}/docker-compose.yml up -d"
+}
+
+def commitAndPushChanges(repoDir, fileName, commitMessage) {
+    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+        dir(repoDir) {
+            sh "git add ${fileName}"
+            sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
+            sh "git push"
+        }
+    }
+}
+
+def rollbackChanges(repoDir) {
+    dir(repoDir) {
+        echo 'Deployment failed. Reverting docker-compose.yml changes...'
+        sh 'git reset --hard HEAD'
+        sh "docker compose -f ${repoDir}/docker-compose.yml up -d"
     }
 }
