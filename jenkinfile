@@ -15,6 +15,7 @@ pipeline {
             steps {
                 script {
                     cloneOrUpdateRepo(APP_DIR, APP_REPO)
+                    cloneOrUpdateRepo(DOCKER_FILES_DIR, DOCKER_FILES_REPO)
                 }
             }
         }
