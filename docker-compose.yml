@@ -38,11 +38,8 @@ services:
 
 networks:
   default:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.21.0.0/16
+    external:
+      name: elk_network
 
 volumes:
   nexus-data:

@@ -3,3 +3,11 @@ sudo chown 1000
 
 debemos de crear la red
 docker network create nexus-net
+
+docker network create --subnet=172.21.0.0/16 elk_network
+
+
+la primera vez si o si ejecutar
+docker-compose up setup
+
+

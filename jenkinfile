@@ -8,14 +8,21 @@ pipeline {
         DOCKER_FILES_DIR = 'docker-files'
         APP_REPO = 'https://github.com/gerardo-lopez-dev-gh/example-voting-app.git'
         APP_DIR = 'example-voting-app'
+        LOGSTASH_HOST = '172.21.0.6' // IP o nombre de host del contenedor Logstash
+        LOGSTASH_PORT = 50000
     }
     
     stages {
         stage('Prepare Repositories') {
             steps {
                 script {
+                    logToLogstash('INFO', "Starting repository preparation at ${env.APP_DIR}")
                     cloneOrUpdateRepo(APP_DIR, APP_REPO)
+                    logToLogstash('INFO', "Finished cloning/updating ${env.APP_DIR} successfully")
+                    
+                    logToLogstash('INFO', "Starting cloning/updating of ${env.DOCKER_FILES_DIR}")
                     cloneOrUpdateRepo(DOCKER_FILES_DIR, DOCKER_FILES_REPO)
+                    logToLogstash('INFO', "Finished cloning/updating ${env.DOCKER_FILES_DIR} successfully")
                 }
             }
         }
@@ -38,4 +45,10 @@ def cloneOrUpdateRepo(repoDir, repoUrl) {
             sh "git clone ${repoUrl} ${repoDir}"
         }
     }
+}
+
+def logToLogstash(logLevel, message) {
+    def timestamp = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+    def logMessage = "{\"timestamp\": \"${timestamp}\", \"level\": \"${logLevel}\", \"message\": \"${message}\"}"
+    sh "curl -X POST -H 'Content-Type: application/json' -d '${logMessage}' http://${env.LOGSTASH_HOST}:${env.LOGSTASH_PORT}"
 }
