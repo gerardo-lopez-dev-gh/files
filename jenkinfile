@@ -1,0 +1,40 @@
+pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = '172.21.0.3:8082'
+        DOCKER_IMAGE_PREFIX = 'example-voting-app'
+        DEPLOY_LOG = 'deploy_log.txt'
+        DOCKER_FILES_REPO = 'https://github.com/gerardo-lopez-dev-gh/docker-files.git'
+        DOCKER_FILES_DIR = 'docker-files'
+        APP_REPO = 'https://github.com/gerardo-lopez-dev-gh/example-voting-app.git'
+        APP_DIR = 'example-voting-app'
+    }
+    
+    stages {
+        stage('Prepare Repositories') {
+            steps {
+                script {
+                    cloneOrUpdateRepo(APP_DIR, APP_REPO)
+                }
+            }
+        }
+    }
+}
+
+// Helper Functions
+def cloneOrUpdateRepo(repoDir, repoUrl) {
+    withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+        if (fileExists(repoDir)) {
+            if (fileExists("${repoDir}/.git")) {
+                dir(repoDir) {
+                    sh 'git pull origin main'
+                }
+            } else {
+                sh "rm -rf ${repoDir}"
+                sh "git clone ${repoUrl} ${repoDir}"
+            }
+        } else {
+            sh "git clone ${repoUrl} ${repoDir}"
+        }
+    }
+}
