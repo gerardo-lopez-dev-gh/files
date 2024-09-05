@@ -36,123 +36,124 @@
                 }
             }
 
-            stage('Construir Imágenes Docker') {
-                steps {
-                    script {
-                        try {
-                            logToLogstash('INFO', "Iniciando la construcción de imágenes Docker")
-                            def startTime = System.currentTimeMillis() as long
-                            def services = ['vote', 'result', 'worker', 'seed-data']
-                            services.each { service ->
-                                logToLogstash('INFO', "Iniciando construcción de imagen Docker para ${service} en la ruta ${APP_DIR}/${service}")
-                                buildDockerImage(service, "${APP_DIR}/${service}")
-                            }
-                            def endTime = System.currentTimeMillis() as long
-                            def formattedDuration = formatTimeDifference(startTime, endTime)
-                            logToLogstash('INFO', "Construcción de imágenes Docker completada en ${formattedDuration}")
-                        } catch (Exception e) {
-                            logToLogstash('ERROR', "Error en la construcción de imágenes Docker: ${e.message}")
-                            error("Falló la construcción de imágenes Docker")
+        stage('Construir Imágenes Docker') {
+            steps {
+                script {
+                    try {
+                        logToLogstash('INFO', "Iniciando la construcción de imágenes Docker")
+                        def startTime = System.currentTimeMillis() as long
+                        def services = ['vote', 'result', 'worker', 'seed-data']
+                        services.each { service ->
+                            logToLogstash('INFO', "Iniciando construcción de imagen Docker para ${service} en la ruta ${APP_DIR}/${service}")
+                            buildDockerImage(service, "${APP_DIR}/${service}")
                         }
-                    }
-                }
-            }
-
-            stage('Generar y Publicar Imágenes con Tag') {
-                steps {
-                    script {
-                        try {
-                            logToLogstash('INFO', "Iniciando la generación y publicación de imágenes con tag")
-                            def startTime = System.currentTimeMillis() as long
-
-                            // Obtener hash del commit
-                            logToLogstash('INFO', "Obteniendo el hash del último commit del repositorio ${APP_DIR}")
-                            def commitHash = getGitCommitHash(APP_DIR)
-                            logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}")
-
-                            // Obtener la fecha actual
-                            logToLogstash('INFO', "Obteniendo la fecha actual")
-                            def currentDate = getCurrentDate()
-                            logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}")
-
-                            // Generar el tag de la imagen Docker
-                            env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
-                            logToLogstash('INFO', "Tag de la imagen Docker generado: ${env.DOCKER_IMAGE_TAG}")
-
-                            // Generar y publicar imágenes para cada servicio
-                            def services = ['vote', 'result', 'worker', 'seed-data']
-                            services.each { service ->
-                                logToLogstash('INFO', "Iniciando la generación y publicación de la imagen Docker para el servicio: ${service}")
-                                tagAndPushDockerImage(service)
-                            }
-
-                            // Registrar el tag en el archivo de log de despliegue
-                            logToLogstash('INFO', "Registrando el tag ${env.DOCKER_IMAGE_TAG} en ${DEPLOY_LOG}")
-                            sh "echo ${DOCKER_IMAGE_TAG} >> ${DEPLOY_LOG}"
-                            def endTime = System.currentTimeMillis() as long
-                            def formattedDuration = formatTimeDifference(startTime, endTime)
-                            logToLogstash('INFO', "Generación y publicación de imágenes completada en ${formattedDuration}")
-                        } catch (Exception e) {
-                            logToLogstash('ERROR', "Error en la generación y publicación de imágenes: ${e.message}")
-                            logToLogstash('ERROR', "Detalle completo del error: ${e}")
-                            error("Falló la generación y publicación de imágenes")
-                        }
-                    }
-                }
-            }
-
-
-
-            stage('Despliegue') {
-                steps {
-                    script {
-                                    try {
-                            logToLogstash('INFO', "Iniciando el despliegue")
-                            def startTime = System.currentTimeMillis() as long
-
-                            // Llamamos a cleanGitRepo antes de actualizar los tags en docker-compose.yml
-                            cleanGitRepo(DOCKER_FILES_DIR)
-                            logToLogstash('INFO', "Repositorio limpiado, procediendo a actualizar docker-compose.yml")
-
-                            // Actualizar los tags en docker-compose.yml
-                            updateDockerComposeTags()
-
-                            // Continuar con las siguientes acciones
-                            stopExistingContainers()
-                            startNewDeployment()
-
-                            def endTime = System.currentTimeMillis() as long
-                            def formattedDuration = formatTimeDifference(startTime, endTime)
-                            logToLogstash('INFO', "Despliegue completado en ${formattedDuration}")
-                        } catch (Exception e) {
-                            logToLogstash('ERROR', "Error en el despliegue: ${e.message}")
-                            error("Falló el despliegue")
-                        }
-                    }
-                }
-            }
-
-            stage('Commit y Push de Cambios') {
-                when {
-                    expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-                }
-                steps {         
-                    script {
-                        try {
-                            logToLogstash('INFO', "Iniciando el commit y push de cambios")
-                            def startTime = System.currentTimeMillis() as long
-                            commitAndPushChanges(DOCKER_FILES_DIR, 'docker-compose.yml', "Actualizado docker-compose.yml con tag ${DOCKER_IMAGE_TAG}")
-                            def endTime = System.currentTimeMillis() as long
-                            def formattedDuration = formatTimeDifference(startTime, endTime)
-                            logToLogstash('INFO', "Commit y push de cambios completado en ${formattedDuration}")
-                        } catch (Exception e) {
-                            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
-                            error("Falló el commit y push de cambios")
-                        }
+                        def endTime = System.currentTimeMillis() as long
+                        def formattedDuration = formatTimeDifference(startTime, endTime)
+                        logToLogstash('INFO', "Construcción de imágenes Docker completada en ${formattedDuration}")
+                    } catch (Exception e) {
+                        logToLogstash('ERROR', "Error en la construcción de imágenes Docker: ${e.message}")
+                        error("Falló la construcción de imágenes Docker")
                     }
                 }
             }
         }
+
+        stage('Generar y Publicar Imágenes con Tag') {
+            steps {
+                script {
+                    try {
+                        logToLogstash('INFO', "Iniciando la generación y publicación de imágenes con tag")
+                        def startTime = System.currentTimeMillis() as long
+
+                        // Obtener hash del commit
+                        logToLogstash('INFO', "Obteniendo el hash del último commit del repositorio ${APP_DIR}")
+                        def commitHash = getGitCommitHash(APP_DIR)
+                        logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}")
+
+                        // Obtener la fecha actual
+                        logToLogstash('INFO', "Obteniendo la fecha actual")
+                        def currentDate = getCurrentDate()
+                        logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}")
+
+                        // Generar el tag de la imagen Docker
+                        env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
+                        logToLogstash('INFO', "Tag de la imagen Docker generado: ${env.DOCKER_IMAGE_TAG}")
+
+                        // Generar y publicar imágenes para cada servicio
+                        def services = ['vote', 'result', 'worker', 'seed-data']
+                        services.each { service ->
+                            logToLogstash('INFO', "Iniciando la generación y publicación de la imagen Docker para el servicio: ${service}")
+                            tagAndPushDockerImage(service)
+                        }
+
+                        // Registrar el tag en el archivo de log de despliegue
+                        logToLogstash('INFO', "Registrando el tag ${env.DOCKER_IMAGE_TAG} en ${DEPLOY_LOG}")
+                        sh "echo ${DOCKER_IMAGE_TAG} >> ${DEPLOY_LOG}"
+                        def endTime = System.currentTimeMillis() as long
+                        def formattedDuration = formatTimeDifference(startTime, endTime)
+                        logToLogstash('INFO', "Generación y publicación de imágenes completada en ${formattedDuration}")
+                    } catch (Exception e) {
+                        logToLogstash('ERROR', "Error en la generación y publicación de imágenes: ${e.message}")
+                        logToLogstash('ERROR', "Detalle completo del error: ${e}")
+                        error("Falló la generación y publicación de imágenes")
+                    }
+                }
+            }
+        }
+
+
+
+        stage('Despliegue') {
+            steps {
+                script {
+                                try {
+                        logToLogstash('INFO', "Iniciando el despliegue")
+                        def startTime = System.currentTimeMillis() as long
+
+                        // Llamamos a cleanGitRepo antes de actualizar los tags en docker-compose.yml
+                        cleanGitRepo(DOCKER_FILES_DIR)
+                        logToLogstash('INFO', "Repositorio limpiado, procediendo a actualizar docker-compose.yml")
+
+                        // Actualizar los tags en docker-compose.yml
+                        updateDockerComposeTags()
+
+                        // Continuar con las siguientes acciones
+                        stopExistingContainers()
+                        startNewDeployment()
+
+                        def endTime = System.currentTimeMillis() as long
+                        def formattedDuration = formatTimeDifference(startTime, endTime)
+                        logToLogstash('INFO', "Despliegue completado en ${formattedDuration}")
+                    } catch (Exception e) {
+                        logToLogstash('ERROR', "Error en el despliegue: ${e.message}")
+                        error("Falló el despliegue")
+                    }
+                }
+            }
+        }
+
+        stage('Commit y Push de Cambios') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {         
+                script {
+                    try {
+                        logToLogstash('INFO', "Iniciando el commit y push de cambios")
+                        def startTime = System.currentTimeMillis() as long
+                        commitAndPushChanges(DOCKER_FILES_DIR, 'docker-compose.yml', "Actualizado docker-compose.yml con tag ${DOCKER_IMAGE_TAG}")
+                        def endTime = System.currentTimeMillis() as long
+                        def formattedDuration = formatTimeDifference(startTime, endTime)
+                        logToLogstash('INFO', "Commit y push de cambios completado en ${formattedDuration}")
+                    } catch (Exception e) {
+                        logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
+                        error("Falló el commit y push de cambios")
+                    }
+                }
+            }
+        }
+    }
+            
 
         post {
             failure {
@@ -301,22 +302,41 @@
 
     def commitAndPushChanges(repoDir, fileName, commitMessage) {
         try {
-            logToLogstash('INFO', "Realizando commit y push de cambios en ${fileName}")
+            logToLogstash('INFO', "Iniciando commit y push de cambios en ${fileName}")
+            
             withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
+
                 dir(repoDir) {
-                    sh 'git config user.name "gerardo-lopez-dev-gh"'
-                    sh 'git config user.email "gerardo.a.lopez1994@gmail.com"'
+                    echo "Directorio actual: ${pwd()}"
+                    
+                    // Añadir el archivo especificado
                     sh "git add ${fileName}"
+
+                    // Configurar o actualizar la URL del repositorio remoto
+                    def remoteUrl = sh(returnStdout: true, script: 'git config --get remote.origin.url').trim()
+                    if (!remoteUrl) {
+                        sh "git remote add origin ${repoUrl}"
+                    } else {
+                        sh "git remote set-url origin ${repoUrl}"
+                    }
+
+                    // Forzar la detección de cambios y hacer commit
+                    sh "git add -A"
                     sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
+
+                    // Intentar hacer push
                     sh "git push origin main"
                 }
             }
-            logToLogstash('INFO', "Commit y push de cambios en ${fileName} completado con éxito")
+
+            logToLogstash('INFO', "Commit y push de cambios completado en ${fileName}")
         } catch (Exception e) {
             logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
             throw e
         }
     }
+
 
     def rollbackChanges(repoDir) {
         try {
@@ -333,22 +353,28 @@
     }
 
     def formatTimeDifference(startTime, endTime) {
-        // Calculamos la duración total en milisegundos como long
         def duration = (endTime - startTime) as long
         try {
-            // Convertimos la duración a horas, minutos, segundos y milisegundos usando solo enteros (long)
+            // Convertimos la duración a horas, minutos, segundos y milisegundos
             def hours = Math.floorDiv(duration, 1000 * 60 * 60) % 24
             def minutes = Math.floorDiv(duration, 1000 * 60) % 60
             def seconds = Math.floorDiv(duration, 1000) % 60
             def millis = duration % 1000
+
+            // Log para rastrear los valores calculados
+            logToLogstash('INFO', "Tiempo total: ${duration}ms, Horas: ${hours}, Minutos: ${minutes}, Segundos: ${seconds}, Milisegundos: ${millis}")
+
             // Formateamos la diferencia de tiempo
             def formattedTime = String.format("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
+            logToLogstash('INFO', "Diferencia de tiempo formateada: ${formattedTime}")
+
             return formattedTime
         } catch (Exception e) {
             logToLogstash('ERROR', "Error al calcular la diferencia de tiempo: ${e.message}")
             throw e
         }
     }
+
 
     // Limpiar el repositorio de archivos sin seguimiento y resetear cambios
     def cleanGitRepo(repoDir) {
