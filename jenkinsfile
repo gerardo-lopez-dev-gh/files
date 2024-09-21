@@ -1,40 +1,40 @@
-    pipeline {
-        agent any
+pipeline {
+    agent any
 
-        environment {
-            DEPLOYMENT_ID = UUID.randomUUID().toString() 
-            DOCKER_REGISTRY = '172.21.0.3:8082'
-            DOCKER_IMAGE_PREFIX = 'example-voting-app'
-            DEPLOY_LOG = 'deploy_log.txt'
-            DOCKER_FILES_REPO = 'https://github.com/gerardo-lopez-dev-gh/docker-files.git'
-            DOCKER_FILES_DIR = 'docker-files'
-            APP_REPO = 'https://github.com/gerardo-lopez-dev-gh/example-voting-app.git'
-            APP_DIR = 'example-voting-app'
-            LOGSTASH_HOST = '172.21.0.6' // IP o nombre de host del contenedor Logstash
-            LOGSTASH_PORT = 50000
-        }
+    environment {
+        DEPLOYMENT_ID = UUID.randomUUID().toString() 
+        DOCKER_REGISTRY = '172.21.0.3:8082'
+        DOCKER_IMAGE_PREFIX = 'example-voting-app'
+        DEPLOY_LOG = 'deploy_log.txt'
+        DOCKER_FILES_REPO = 'https://github.com/gerardo-lopez-dev-gh/docker-files.git'
+        DOCKER_FILES_DIR = 'docker-files'
+        APP_REPO = 'https://github.com/gerardo-lopez-dev-gh/example-voting-app.git'
+        APP_DIR = 'example-voting-app'
+        LOGSTASH_HOST = '172.21.0.6'
+        LOGSTASH_PORT = 50000
+    }
 
-        stages {
-            stage('Preparar Repositorios') {
-                steps {
-                    script {
-                        try {
-                            logToLogstash('INFO', "Iniciando la preparación del repositorio en ${env.APP_DIR}")
-                            def startTime = System.currentTimeMillis() as long
-                            cloneOrUpdateRepo(APP_DIR, APP_REPO)
-                            logToLogstash('INFO', "Repositorio ${APP_DIR} preparado con éxito.")
-                            cloneOrUpdateRepo(DOCKER_FILES_DIR, DOCKER_FILES_REPO)
-                            logToLogstash('INFO', "Repositorio ${DOCKER_FILES_DIR} preparado con éxito.")
-                            def endTime = System.currentTimeMillis() as long
-                            def formattedDuration = formatTimeDifference(startTime, endTime)
-                            logToLogstash('INFO', "Preparación del repositorio completada en ${formattedDuration}")
-                        } catch (Exception e) {
-                            logToLogstash('ERROR', "Error en la preparación de repositorios: ${e.message}")
-                            error("Falló la preparación de repositorios")
-                        }
+    stages {
+        stage('Preparar Repositorios') {
+            steps {
+                script {
+                    try {
+                        logToLogstash('INFO', "Iniciando la preparación del repositorio en ${env.APP_DIR}")
+                        def startTime = System.currentTimeMillis() as long
+                        cloneOrUpdateRepo(APP_DIR, APP_REPO)
+                        logToLogstash('INFO', "Repositorio ${APP_DIR} preparado con éxito.")
+                        cloneOrUpdateRepo(DOCKER_FILES_DIR, DOCKER_FILES_REPO)
+                        logToLogstash('INFO', "Repositorio ${DOCKER_FILES_DIR} preparado con éxito.")
+                        def endTime = System.currentTimeMillis() as long
+                        def formattedDuration = formatTimeDifference(startTime, endTime)
+                        logToLogstash('INFO', "Preparación del repositorio completada en ${formattedDuration}")
+                    } catch (Exception e) {
+                        logToLogstash('ERROR', "Error en la preparación de repositorios: ${e.message}")
+                        error("Falló la preparación de repositorios")
                     }
                 }
             }
+        }
 
         stage('Construir Imágenes Docker') {
             steps {
@@ -65,28 +65,23 @@
                         logToLogstash('INFO', "Iniciando la generación y publicación de imágenes con tag")
                         def startTime = System.currentTimeMillis() as long
 
-                        // Obtener hash del commit
                         logToLogstash('INFO', "Obteniendo el hash del último commit del repositorio ${APP_DIR}")
                         def commitHash = getGitCommitHash(APP_DIR)
                         logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}")
 
-                        // Obtener la fecha actual
                         logToLogstash('INFO', "Obteniendo la fecha actual")
                         def currentDate = getCurrentDate()
                         logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}")
 
-                        // Generar el tag de la imagen Docker
                         env.DOCKER_IMAGE_TAG = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
                         logToLogstash('INFO', "Tag de la imagen Docker generado: ${env.DOCKER_IMAGE_TAG}")
 
-                        // Generar y publicar imágenes para cada servicio
                         def services = ['vote', 'result', 'worker', 'seed-data']
                         services.each { service ->
                             logToLogstash('INFO', "Iniciando la generación y publicación de la imagen Docker para el servicio: ${service}")
                             tagAndPushDockerImage(service)
                         }
 
-                        // Registrar el tag en el archivo de log de despliegue
                         logToLogstash('INFO', "Registrando el tag ${env.DOCKER_IMAGE_TAG} en ${DEPLOY_LOG}")
                         sh "echo ${DOCKER_IMAGE_TAG} >> ${DEPLOY_LOG}"
                         def endTime = System.currentTimeMillis() as long
@@ -101,23 +96,16 @@
             }
         }
 
-
-
         stage('Despliegue') {
             steps {
                 script {
-                                try {
+                    try {
                         logToLogstash('INFO', "Iniciando el despliegue")
                         def startTime = System.currentTimeMillis() as long
-
-                        // Llamamos a cleanGitRepo antes de actualizar los tags en docker-compose.yml
                         cleanGitRepo(DOCKER_FILES_DIR)
                         logToLogstash('INFO', "Repositorio limpiado, procediendo a actualizar docker-compose.yml")
 
-                        // Actualizar los tags en docker-compose.yml
                         updateDockerComposeTags()
-
-                        // Continuar con las siguientes acciones
                         stopExistingContainers()
                         startNewDeployment()
 
@@ -155,241 +143,223 @@
     }
             
 
-        post {
-            failure {
-                script {
-                    logToLogstash('ERROR', "El despliegue falló. Revirtiendo cambios en docker-compose.yml")
-                    rollbackChanges(DOCKER_FILES_DIR)
-                }
+    post {
+        failure {
+            script {
+                logToLogstash('ERROR', "El despliegue falló. Revirtiendo cambios en docker-compose.yml")
+                rollbackChanges(DOCKER_FILES_DIR)
             }
         }
     }
+}
 
-    // Funciones auxiliares
-    def cloneOrUpdateRepo(repoDir, repoUrl) {
-        try {
-            withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                if (fileExists(repoDir)) {
-                    if (fileExists("${repoDir}/.git")) {
-                        dir(repoDir) {
-                            sh 'git pull origin main'
-                        }
-                    } else {
-                        sh "rm -rf ${repoDir}"
-                        sh "git clone ${repoUrl} ${repoDir}"
+// Funciones auxiliares
+def cloneOrUpdateRepo(repoDir, repoUrl) {
+    try {
+        withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+            if (fileExists(repoDir)) {
+                if (fileExists("${repoDir}/.git")) {
+                    dir(repoDir) {
+                        sh 'git pull origin main'
                     }
                 } else {
+                    sh "rm -rf ${repoDir}"
                     sh "git clone ${repoUrl} ${repoDir}"
                 }
+            } else {
+                sh "git clone ${repoUrl} ${repoDir}"
             }
-            logToLogstash('INFO', "Repositorio ${repoDir} actualizado/clonado con éxito")
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error en la clonación o actualización del repositorio ${repoDir}: ${e.message}")
-            throw e
         }
+        logToLogstash('INFO', "Repositorio ${repoDir} actualizado/clonado con éxito")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error en la clonación o actualización del repositorio ${repoDir}: ${e.message}")
+        throw e
     }
+}
 
-    def buildDockerImage(service, dir) {
-        try {
-            logToLogstash('INFO', "Construyendo imagen Docker para el servicio: ${service} en la ruta ${dir}")
-            sh "docker build -t ${DOCKER_IMAGE_PREFIX}-${service}:latest -f ${dir}/Dockerfile ${dir}"
-            logToLogstash('INFO', "Imagen Docker para el servicio ${service} construida con éxito")
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al construir la imagen Docker para el servicio ${service}: ${e.message}")
-            throw e
-        }
+def buildDockerImage(service, dir) {
+    try {
+        logToLogstash('INFO', "Construyendo imagen Docker para el servicio: ${service} en la ruta ${dir}")
+        sh "docker build -t ${DOCKER_IMAGE_PREFIX}-${service}:latest -f ${dir}/Dockerfile ${dir}"
+        logToLogstash('INFO', "Imagen Docker para el servicio ${service} construida con éxito")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al construir la imagen Docker para el servicio ${service}: ${e.message}")
+        throw e
     }
+}
 
-    def tagAndPushDockerImage(service) {
-        def imageName = "${DOCKER_IMAGE_PREFIX}-${service}"
-        def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
+def tagAndPushDockerImage(service) {
+    def imageName = "${DOCKER_IMAGE_PREFIX}-${service}"
+    def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
+    
+    try {
+        logToLogstash('INFO', "Generando y publicando imagen Docker: ${taggedImageName}")
+        def tagCommand = "docker tag ${imageName}:latest ${taggedImageName}"
+        logToLogstash('INFO', "Ejecutando comando: ${tagCommand}")
+        sh tagCommand
+        logToLogstash('INFO', "Imagen Docker ${taggedImageName} etiquetada con éxito")
         
-        try {
-            logToLogstash('INFO', "Generando y publicando imagen Docker: ${taggedImageName}")
+        withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+            def loginCommand = "echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}"
+            logToLogstash('INFO', "Ejecutando comando: ${loginCommand}")
+            sh loginCommand
             
-            // Comando para etiquetar la imagen
-            def tagCommand = "docker tag ${imageName}:latest ${taggedImageName}"
-            logToLogstash('INFO', "Ejecutando comando: ${tagCommand}")
-            sh tagCommand
-            logToLogstash('INFO', "Imagen Docker ${taggedImageName} etiquetada con éxito")
-            
-            // Autenticación y envío de la imagen al registro
-            withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
-                def loginCommand = "echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}"
-                logToLogstash('INFO', "Ejecutando comando: ${loginCommand}")
-                sh loginCommand
-                
-                def pushCommand = "docker push ${taggedImageName}"
-                logToLogstash('INFO', "Ejecutando comando: ${pushCommand}")
-                sh pushCommand
-                logToLogstash('INFO', "Imagen Docker ${taggedImageName} publicada con éxito")
+            def pushCommand = "docker push ${taggedImageName}"
+            logToLogstash('INFO', "Ejecutando comando: ${pushCommand}")
+            sh pushCommand
+            logToLogstash('INFO', "Imagen Docker ${taggedImageName} publicada con éxito")
+        }
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al generar y publicar la imagen Docker ${taggedImageName}: ${e.message}")
+        logToLogstash('ERROR', "Salida completa del error: ${e}")
+        throw e
+    }
+}
+
+def getGitCommitHash(repoDir) {
+    try {
+        logToLogstash('INFO', "Obteniendo el hash del último commit en el directorio: ${repoDir}")
+        def commitHash = sh(returnStdout: true, script: "cd ${repoDir} && git log -1 --pretty=format:%h").trim()
+        logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}")
+        return commitHash
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al obtener el hash del commit: ${e.message}")
+        throw e
+    }
+}
+
+def getCurrentDate() {
+    try {
+        logToLogstash('INFO', "Obteniendo la fecha actual usando Groovy")
+        def currentDate = new Date().format('yyyyMMdd')
+        logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}")
+        return currentDate
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al obtener la fecha actual: ${e.message}")
+        throw e
+    }
+}
+
+
+def updateDockerComposeTags() {
+    try {
+        logToLogstash('INFO', "Actualizando tags en docker-compose.yml")
+        def composeFilePath = "${DOCKER_FILES_DIR}/docker-compose.yml"
+        def composeFile = readFile composeFilePath
+        def updatedComposeFile = composeFile.replaceAll('example-voting-app-\\w+:.*', { match ->
+            def serviceName = match.split(':')[0]
+            return "${serviceName}:${DOCKER_IMAGE_TAG}"
+        })
+        writeFile file: composeFilePath, text: updatedComposeFile
+        logToLogstash('INFO', "Tags en docker-compose.yml actualizados con éxito")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al actualizar tags en docker-compose.yml: ${e.message}")
+        throw e
+    }
+}
+
+def stopExistingContainers() {
+    try {
+        logToLogstash('INFO', "Deteniendo contenedores existentes")
+        def containers = sh(returnStdout: true, script: "docker ps -a --filter 'name=example-' --format '{{.ID}}'").trim()
+        if (containers) {
+            containers.split('\\n').each { container ->
+                sh "docker rm -f ${container}"
             }
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al generar y publicar la imagen Docker ${taggedImageName}: ${e.message}")
-            logToLogstash('ERROR', "Salida completa del error: ${e}")
-            throw e
         }
+        logToLogstash('INFO', "Contenedores existentes detenidos con éxito")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al detener contenedores existentes: ${e.message}")
+        throw e
     }
+}
 
-    def getGitCommitHash(repoDir) {
-        try {
-            logToLogstash('INFO', "Obteniendo el hash del último commit en el directorio: ${repoDir}")
-            def commitHash = sh(returnStdout: true, script: "cd ${repoDir} && git log -1 --pretty=format:%h").trim()
-            logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}")
-            return commitHash
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al obtener el hash del commit: ${e.message}")
-            throw e
-        }
+def startNewDeployment() {
+    try {
+        logToLogstash('INFO', "Iniciando nuevo despliegue")
+        sh "docker compose -f ${DOCKER_FILES_DIR}/docker-compose.yml up -d"
+        logToLogstash('INFO', "Nuevo despliegue iniciado con éxito")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al iniciar el nuevo despliegue: ${e.message}")
+        throw e
     }
+}
 
-    def getCurrentDate() {
-        try {
-            logToLogstash('INFO', "Obteniendo la fecha actual")
-            def currentDate = sh(returnStdout: true, script: 'date "+%Y%m%d"').trim()
-            logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}")
-            return currentDate
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al obtener la fecha actual: ${e.message}")
-            throw e
-        }
-    }
+def commitAndPushChanges(repoDir, fileName, commitMessage) {
+    try {
+        logToLogstash('INFO', "Iniciando commit y push de cambios en ${fileName}")
+        
+        withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+            def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
 
-
-
-    def updateDockerComposeTags() {
-        try {
-            logToLogstash('INFO', "Actualizando tags en docker-compose.yml")
-            def composeFilePath = "${DOCKER_FILES_DIR}/docker-compose.yml"
-            def composeFile = readFile composeFilePath
-            def updatedComposeFile = composeFile.replaceAll('example-voting-app-\\w+:.*', { match ->
-                def serviceName = match.split(':')[0]
-                return "${serviceName}:${DOCKER_IMAGE_TAG}"
-            })
-            writeFile file: composeFilePath, text: updatedComposeFile
-            logToLogstash('INFO', "Tags en docker-compose.yml actualizados con éxito")
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al actualizar tags en docker-compose.yml: ${e.message}")
-            throw e
-        }
-    }
-    def stopExistingContainers() {
-        try {
-            logToLogstash('INFO', "Deteniendo contenedores existentes")
-            def containers = sh(returnStdout: true, script: "docker ps -a --filter 'name=example-' --format '{{.ID}}'").trim()
-            if (containers) {
-                containers.split('\n').each { container ->
-                    sh "docker rm -f ${container}"
-                }
-            }
-            logToLogstash('INFO', "Contenedores existentes detenidos con éxito")
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al detener contenedores existentes: ${e.message}")
-            throw e
-        }
-    }
-
-    def startNewDeployment() {
-        try {
-            logToLogstash('INFO', "Iniciando nuevo despliegue")
-            sh "docker compose -f ${DOCKER_FILES_DIR}/docker-compose.yml up -d"
-            logToLogstash('INFO', "Nuevo despliegue iniciado con éxito")
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al iniciar el nuevo despliegue: ${e.message}")
-            throw e
-        }
-    }
-
-    def commitAndPushChanges(repoDir, fileName, commitMessage) {
-        try {
-            logToLogstash('INFO', "Iniciando commit y push de cambios en ${fileName}")
-            
-            withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
-
-                dir(repoDir) {
-                    echo "Directorio actual: ${pwd()}"
-                    
-                    // Añadir el archivo especificado
-                    sh "git add ${fileName}"
-
-                    // Configurar o actualizar la URL del repositorio remoto
-                    def remoteUrl = sh(returnStdout: true, script: 'git config --get remote.origin.url').trim()
-                    if (!remoteUrl) {
-                        sh "git remote add origin ${repoUrl}"
-                    } else {
-                        sh "git remote set-url origin ${repoUrl}"
-                    }
-
-                    // Forzar la detección de cambios y hacer commit
-                    sh "git add -A"
-                    sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
-
-                    // Intentar hacer push
-                    sh "git push origin main"
-                }
-            }
-
-            logToLogstash('INFO', "Commit y push de cambios completado en ${fileName}")
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
-            throw e
-        }
-    }
-
-
-    def rollbackChanges(repoDir) {
-        try {
-            logToLogstash('ERROR', "Revirtiendo cambios en ${repoDir} debido a fallo en despliegue")
             dir(repoDir) {
-                sh 'git reset --hard HEAD'
-                sh "docker compose -f ${repoDir}/docker-compose.yml up -d"
+                echo "Directorio actual: ${pwd()}"
+                
+                sh "git add ${fileName}"
+
+                def remoteUrl = sh(returnStdout: true, script: 'git config --get remote.origin.url').trim()
+                if (!remoteUrl) {
+                    sh "git remote add origin ${repoUrl}"
+                } else {
+                    sh "git remote set-url origin ${repoUrl}"
+                }
+
+                sh "git add -A"
+                sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
+                sh "git push origin main"
             }
-            logToLogstash('INFO', "Cambios revertidos y contenedores reinstaurados")
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al revertir cambios: ${e.message}")
-            throw e
         }
+
+        logToLogstash('INFO', "Commit y push de cambios completado en ${fileName}")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
+        throw e
     }
+}
 
-    def formatTimeDifference(startTime, endTime) {
-        def duration = (endTime - startTime) as long
-        try {
-            // Convertimos la duración a horas, minutos, segundos y milisegundos
-            def hours = Math.floorDiv(duration, 1000 * 60 * 60) % 24
-            def minutes = Math.floorDiv(duration, 1000 * 60) % 60
-            def seconds = Math.floorDiv(duration, 1000) % 60
-            def millis = duration % 1000
-
-            // Log para rastrear los valores calculados
-            logToLogstash('INFO', "Tiempo total: ${duration}ms, Horas: ${hours}, Minutos: ${minutes}, Segundos: ${seconds}, Milisegundos: ${millis}")
-
-            // Formateamos la diferencia de tiempo
-            def formattedTime = String.format("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
-            logToLogstash('INFO', "Diferencia de tiempo formateada: ${formattedTime}")
-
-            return formattedTime
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al calcular la diferencia de tiempo: ${e.message}")
-            throw e
-        }
-    }
-
-
-    // Limpiar el repositorio de archivos sin seguimiento y resetear cambios
-    def cleanGitRepo(repoDir) {
+def rollbackChanges(repoDir) {
+    try {
+        logToLogstash('ERROR', "Revirtiendo cambios en ${repoDir} debido a fallo en despliegue")
         dir(repoDir) {
-            logToLogstash('INFO', "Limpiando el estado del repositorio en ${repoDir}")
-            sh 'git reset --hard'  // Restablece cualquier cambio no confirmado
-            sh 'git clean -fd'     // Elimina archivos y directorios sin seguimiento
-            logToLogstash('INFO', "Repositorio limpiado con éxito")
+            sh 'git reset --hard HEAD'
+            sh "docker compose -f ${repoDir}/docker-compose.yml up -d"
         }
+        logToLogstash('INFO', "Cambios revertidos y contenedores reinstaurados")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al revertir cambios: ${e.message}")
+        throw e
     }
+}
 
-
-    def logToLogstash(logLevel, message) {
-        def timestamp = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
-        def deploymentId = env.DEPLOYMENT_ID // Agrega el identificador único
-        def logMessage = "{\"timestamp\": \"${timestamp}\", \"deployment_id\": \"${deploymentId}\", \"nivel\": \"${logLevel}\", \"mensaje\": \"${message}\"}"
-        sh "curl -X POST -H 'Content-Type: application/json' -d '${logMessage}' http://${env.LOGSTASH_HOST}:${env.LOGSTASH_PORT}"
+def formatTimeDifference(startTime, endTime) {
+    def duration = (endTime - startTime) as long
+    try {
+        def hours = Math.floorDiv(duration, 1000 * 60 * 60) % 24
+        def minutes = Math.floorDiv(duration, 1000 * 60) % 60
+        def seconds = Math.floorDiv(duration, 1000) % 60
+        def millis = duration % 1000
+        logToLogstash('INFO', "Tiempo total: ${duration}ms, Horas: ${hours}, Minutos: ${minutes}, Segundos: ${seconds}, Milisegundos: ${millis}")
+        def formattedTime = String.format("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
+        logToLogstash('INFO', "Diferencia de tiempo formateada: ${formattedTime}")
+        return formattedTime
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al calcular la diferencia de tiempo: ${e.message}")
+        throw e
     }
+}
+
+def cleanGitRepo(repoDir) {
+    dir(repoDir) {
+        logToLogstash('INFO', "Limpiando el estado del repositorio en ${repoDir}")
+        sh 'git reset --hard'
+        sh 'git clean -fd'
+        logToLogstash('INFO', "Repositorio limpiado con éxito")
+    }
+}
+
+def logToLogstash(logLevel, message) {
+    def timestamp = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+    def deploymentId = env.DEPLOYMENT_ID
+    def logMessage = "{\"timestamp\": \"${timestamp}\", \"deployment_id\": \"${deploymentId}\", \"nivel\": \"${logLevel}\", \"mensaje\": \"${message}\"}"
+    sh "curl -X POST -H 'Content-Type: application/json' -d '${logMessage}' http://${env.LOGSTASH_HOST}:${env.LOGSTASH_PORT}"
+}
