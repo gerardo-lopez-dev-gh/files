@@ -109,9 +109,7 @@ pipeline {
                         stopExistingContainers()
                         startNewDeployment()
 
-                        // Introducimos un error intencional para simular fallo
-                        sh 'exit 1' // Este comando siempre falla
-
+                   
                         def endTime = System.currentTimeMillis()
                         def formattedDuration = formatTimeDifference(startTime, endTime)
                         logToLogstash('INFO', "Despliegue completado en ${formattedDuration}")
