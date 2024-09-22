@@ -109,7 +109,10 @@ pipeline {
                         stopExistingContainers()
                         startNewDeployment()
 
-                        def endTime = System.currentTimeMillis() as long
+                        // Introducimos un error intencional para simular fallo
+                        sh 'exit 1' // Este comando siempre falla
+
+                        def endTime = System.currentTimeMillis()
                         def formattedDuration = formatTimeDifference(startTime, endTime)
                         logToLogstash('INFO', "Despliegue completado en ${formattedDuration}")
                     } catch (Exception e) {
@@ -310,9 +313,26 @@ def rollbackChanges(repoDir) {
         logToLogstash('ERROR', "Revirtiendo cambios en ${repoDir} debido a fallo en despliegue")
 
         dir(repoDir) {
-            sh 'git reset --hard HEAD'
-            sh 'git clean -fd'
-            sh "docker compose -f ${repoDir}/docker-compose.yml up -d"
+            // Capturar código de salida de 'git reset'
+            def resetExitCode = sh(script: 'git reset --hard HEAD', returnStatus: true)
+            if (resetExitCode != 0) {
+                logToLogstash('ERROR', "git reset falló con código: ${resetExitCode}")
+                return
+            }
+
+            // Capturar código de salida de 'git clean'
+            def cleanExitCode = sh(script: 'git clean -fd', returnStatus: true)
+            if (cleanExitCode != 0) {
+                logToLogstash('ERROR', "git clean falló con código: ${cleanExitCode}")
+                return
+            }
+
+            // Capturar código de salida de 'docker compose'
+            def dockerExitCode = sh(script: "docker compose -f docker-compose.yml up -d", returnStatus: true)
+            if (dockerExitCode != 0) {
+                logToLogstash('ERROR', "docker compose falló con código: ${dockerExitCode}")
+                return
+            }
         }
 
         logToLogstash('INFO', "Cambios revertidos y contenedores restaurados")
@@ -321,6 +341,7 @@ def rollbackChanges(repoDir) {
         throw e
     }
 }
+
 
 def formatTimeDifference(startTime, endTime) {
     def duration = (endTime - startTime) as long
