@@ -319,17 +319,37 @@ def commitAndPushChanges(repoDir, fileName, commitMessage) {
 
 def rollbackChanges(repoDir) {
     try {
-        logToLogstash('ERROR', "Revirtiendo cambios en ${repoDir} debido a fallo en despliegue")
-        dir(repoDir) {
-            sh 'git reset --hard HEAD'
-            sh "docker compose -f ${repoDir}/docker-compose.yml up -d"
+        if (!fileExists(repoDir)) {
+            logToLogstash('ERROR', "El directorio ${repoDir} no existe")
+            return
         }
+        
+        logToLogstash('ERROR', "Revirtiendo cambios en ${repoDir} debido a fallo en despliegue")
+        
+        dir(repoDir) {
+            // Limpiar y resetear el repositorio
+            sh 'git clean -fd'
+            def resetExitCode = sh(script: 'git reset --hard HEAD', returnStatus: true)
+            if (resetExitCode != 0) {
+                logToLogstash('ERROR', "git reset falló con código: ${resetExitCode}")
+                return
+            }
+            
+            // Levantar los contenedores con docker compose
+            def dockerExitCode = sh(script: "docker compose -f ${repoDir}/docker-compose.yml up -d", returnStatus: true)
+            if (dockerExitCode != 0) {
+                logToLogstash('ERROR', "docker compose falló con código: ${dockerExitCode}")
+                return
+            }
+        }
+
         logToLogstash('INFO', "Cambios revertidos y contenedores reinstaurados")
     } catch (Exception e) {
         logToLogstash('ERROR', "Error al revertir cambios: ${e.message}")
         throw e
     }
 }
+
 
 def formatTimeDifference(startTime, endTime) {
     def duration = (endTime - startTime) as long
