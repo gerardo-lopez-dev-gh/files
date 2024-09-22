@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ../jenkins_home:/var/jenkins_home
+      - /mnt/things/volume/jenkins_home/:/var/jenkins_home
     ports:
       - "8080:8080"
       - "5000:5000"
@@ -28,7 +28,7 @@ services:
   nexus:
     image: sonatype/nexus3
     volumes:
-      - nexus-data:/nexus-data
+      - /mnt/things/volume/nexus_data:/nexus-data
     ports:
       - "8081:8081"
       - "8082:8082"
