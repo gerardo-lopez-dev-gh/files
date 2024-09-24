@@ -107,6 +107,10 @@ pipeline {
 
                         updateDockerComposeTags()
                         stopExistingContainers()
+
+                        // Llamada a la función para eliminar imágenes antiguas
+                        deleteOldDockerImages()
+
                         startNewDeployment()
 
                    
@@ -143,6 +147,7 @@ pipeline {
                 }
             }
         }
+        
     }
 
     post {
@@ -248,13 +253,32 @@ def updateDockerComposeTags() {
 
 def stopExistingContainers() {
     try {
-        def containers = sh(returnStdout: true, script: "docker ps -a --filter 'name=example-' --format '{{.ID}}'").trim()
-        if (containers) {
-            containers.split('\n').each { container ->
-                sh "docker rm -f ${container}"
+        logToLogstash('INFO', "Deteniendo y eliminando contenedores existentes que utilizan imágenes antiguas")
+        def containersToRemove = []
+
+        // Usar el patrón de nombres proporcionado: 'docker-files-*'
+        def containersOutput = sh(returnStdout: true, script: """
+            docker ps -a --filter 'name=docker-files-' --format '{{.ID}} {{.Image}}'
+        """).trim()
+
+        if (containersOutput) {
+            containersOutput.split('\\n').each { line ->
+                def parts = line.split(' ')
+                if (parts.length >= 1) {
+                    def containerId = parts[0]
+                    containersToRemove << containerId
+                }
             }
         }
-        logToLogstash('INFO', "Contenedores existentes detenidos con éxito")
+
+        if (containersToRemove) {
+            containersToRemove.unique().each { containerId ->
+                sh "docker rm -f ${containerId}"
+                logToLogstash('INFO', "Contenedor ${containerId} detenido y eliminado")
+            }
+        } else {
+            logToLogstash('INFO', "No se encontraron contenedores para detener")
+        }
     } catch (Exception e) {
         logToLogstash('ERROR', "Error al detener contenedores existentes: ${e.message}")
         throw e
@@ -364,6 +388,56 @@ def cleanGitRepo(repoDir) {
     }
 }
 
+
+def deleteOldDockerImages() {
+    try {
+        logToLogstash('INFO', "Iniciando la eliminación de imágenes antiguas")
+        def startTime = System.currentTimeMillis() as long
+
+        def services = ['vote', 'result', 'worker', 'seed-data']
+        def imagesToDelete = []
+
+        services.each { service ->
+            def imagePattern = "${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}-${service}"
+
+            // Obtener todas las etiquetas de la imagen, excluyendo la actual
+            def imagesOutput = sh(returnStdout: true, script: """
+                docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep '^${imagePattern}:' | grep -v ':${DOCKER_IMAGE_TAG}\$' || true
+            """).trim()
+
+            if (imagesOutput) {
+                imagesOutput.split('\\n').each { line ->
+                    def parts = line.split(' ')
+                    if (parts.length == 2) {
+                        def imageId = parts[1]
+                        imagesToDelete << imageId
+                    }
+                }
+            }
+        }
+
+        if (imagesToDelete) {
+            imagesToDelete.unique().each { imageId ->
+                try {
+                    sh "docker rmi -f ${imageId}"
+                    logToLogstash('INFO', "Imagen ${imageId} eliminada")
+                } catch (Exception e) {
+                    logToLogstash('ERROR', "Error al eliminar la imagen ${imageId}: ${e.message}")
+                }
+            }
+        } else {
+            logToLogstash('INFO', "No hay imágenes antiguas para eliminar")
+        }
+
+        def endTime = System.currentTimeMillis() as long
+        def formattedDuration = formatTimeDifference(startTime, endTime)
+        logToLogstash('INFO', "Eliminación de imágenes antiguas completada en ${formattedDuration}")
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al eliminar imágenes antiguas: ${e.message}")
+        throw e
+    }
+}
+
 def logToLogstash(logLevel, message) {
     def timestamp    = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
     def deploymentId = DEPLOYMENT_ID
@@ -376,3 +450,4 @@ def logToLogstash(logLevel, message) {
     def jsonMessage = groovy.json.JsonOutput.toJson(logMessage)
     sh "curl -X POST -H 'Content-Type: application/json' -d '${jsonMessage}' http://${LOGSTASH_HOST}:${LOGSTASH_PORT}"
 }
+
