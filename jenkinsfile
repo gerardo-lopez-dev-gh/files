@@ -99,6 +99,7 @@
                 steps {
                     script {
                         try {
+                            
                             logToLogstash('INFO', "Iniciando el despliegue")
                             def startTime = System.currentTimeMillis() as long
 
@@ -153,12 +154,20 @@
         post {
             failure {
                 script {
+                    
+                
                     stopExistingContainers()
 
                     // Llamada a la función para eliminar imágenes antiguas
                     deleteOldDockerImages()
                     logToLogstash('ERROR', "El despliegue falló. Revirtiendo cambios en docker-compose.yml")
-                    rollbackChanges(DOCKER_FILES_DIR)
+                    withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                        sh """
+                            echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}
+                        """
+                        rollbackChanges(DOCKER_FILES_DIR)
+                    }
+                    
                 }
             }
         }
@@ -446,13 +455,24 @@
     def logToLogstash(logLevel, message) {
         def timestamp    = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
         def deploymentId = DEPLOYMENT_ID
-        def logMessage   = [
-            timestamp    : timestamp,
-            deployment_id: deploymentId,
-            nivel        : logLevel,
-            mensaje      : message
-        ]
-        def jsonMessage = groovy.json.JsonOutput.toJson(logMessage)
-        sh "curl -X POST -H 'Content-Type: application/json' -d '${jsonMessage}' http://${LOGSTASH_HOST}:${LOGSTASH_PORT}"
+
+        // Construir el JSON manualmente, asegurando que los caracteres Unicode se mantienen
+        def jsonMessage = """
+        {
+            "timestamp": "${timestamp}",
+            "deployment_id": "${deploymentId}",
+            "nivel": "${logLevel}",
+            "mensaje": "${message.replaceAll('"', '\\"')}"
+        }
+        """.stripIndent().trim()
+
+        // Escribir el mensaje JSON en un archivo con codificación UTF-8
+        writeFile(file: 'log_message.json', text: jsonMessage, encoding: 'UTF-8')
+
+        // Enviar el archivo usando curl
+        sh "curl -X POST -H 'Content-Type: application/json; charset=UTF-8' -d @log_message.json http://${LOGSTASH_HOST}:${LOGSTASH_PORT}"
     }
+
+
+
 
