@@ -52,6 +52,8 @@
                                 buildDockerImage(service, "${APP_DIR}/${service}")
                             }
 
+                        
+
                             def endTime = System.currentTimeMillis() as long
                             def formattedDuration = formatTimeDifference(startTime, endTime)
                             logToLogstash('INFO', "Construcción de imágenes Docker completada en ${formattedDuration}")
@@ -302,7 +304,6 @@
         try {
             sh "docker compose -f ${DOCKER_FILES_DIR}/docker-compose.yml up -d"
             logToLogstash('INFO', "Nuevo despliegue iniciado con éxito")
-             sh "exit 1"
         } catch (Exception e) {
             logToLogstash('ERROR', "Error al iniciar el nuevo despliegue: ${e.message}")
             throw e
@@ -456,23 +457,33 @@
         def timestamp    = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
         def deploymentId = DEPLOYMENT_ID
 
-        // Construir el JSON manualmente, asegurando que los caracteres Unicode se mantienen
-        def jsonMessage = """
+        // Construir el mensaje JSON interno
+        def innerJsonMessage = """
         {
             "timestamp": "${timestamp}",
             "deployment_id": "${deploymentId}",
             "nivel": "${logLevel}",
-            "mensaje": "${message.replaceAll('"', '\\"')}"
+            "mensaje": "${message.replaceAll('"', '\\\\"')}"
         }
         """.stripIndent().trim()
 
-        // Escribir el mensaje JSON en un archivo con codificación UTF-8
-        writeFile(file: 'log_message.json', text: jsonMessage, encoding: 'UTF-8')
+        // Escapar el mensaje JSON interno
+        def escapedInnerJsonMessage = innerJsonMessage.replaceAll('"', '\\\\"')
 
-        // Enviar el archivo usando curl
+        // Construir el mensaje JSON final con event.original
+        def jsonMessage = """
+        {
+            "event": {
+                "original": "${escapedInnerJsonMessage}"
+            }
+        }
+        """.stripIndent().trim()
+
+        // Escribir y enviar el mensaje
+        writeFile(file: 'log_message.json', text: jsonMessage, encoding: 'UTF-8')
         sh "curl -X POST -H 'Content-Type: application/json; charset=UTF-8' -d @log_message.json http://${LOGSTASH_HOST}:${LOGSTASH_PORT}"
     }
 
 
-
+        
 
