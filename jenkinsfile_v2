@@ -23,7 +23,7 @@
 
                             repos.each { repo ->
                                 logToLogstash('INFO', "Iniciando la preparación del repositorio en ${repo.dir}", config.logstash.host, config.logstash.port)
-                                cloneOrUpdateRepo(repo.dir, repo.url)
+                                cloneOrUpdateRepo(repo.dir, repo.url, config.logstash.host, config.logstash.port)
                                 logToLogstash('INFO', "Repositorio ${repo.dir} preparado con éxito.", config.logstash.host, config.logstash.port)
                             }
 
@@ -41,7 +41,7 @@
     }
 
     // Funciones auxiliares
-    def cloneOrUpdateRepo(repoDir, repoUrl) {
+    def cloneOrUpdateRepo(repoDir, repoUrl, host, port) {
         try {
             withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                 if (fileExists(repoDir)) {
@@ -57,9 +57,9 @@
                     sh "git clone ${repoUrl} ${repoDir}"
                 }
             }
-            logToLogstash('INFO', "Repositorio ${repoDir} actualizado/clonado con éxito")
+            logToLogstash('INFO', "Repositorio ${repoDir} actualizado/clonado con éxito", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error en la clonación o actualización del repositorio ${repoDir}: ${e.message}")
+            logToLogstash('ERROR', "Error en la clonación o actualización del repositorio ${repoDir}: ${e.message}", host, port)
             throw e
         }
     }
