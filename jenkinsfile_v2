@@ -19,7 +19,7 @@
 
                             logToLogstash('INFO', "Iniciando la preparación de los repositorios", config.logstash.host, config.logstash.port)
 
-                            def startTime = System.currentTimeMillis() as long
+                            
 
                             repos.each { repo ->
                                 logToLogstash('INFO', "Iniciando la preparación del repositorio en ${repo.dir}", config.logstash.host, config.logstash.port)
@@ -27,12 +27,44 @@
                                 logToLogstash('INFO', "Repositorio ${repo.dir} preparado con éxito.", config.logstash.host, config.logstash.port)
                             }
 
-                            def endTime = System.currentTimeMillis() as long
-                            def formattedDuration = formatTimeDifference(startTime, endTime)
-                            logToLogstash('INFO', "Preparación de los repositorios completada en ${formattedDuration}", config.logstash.host, config.logstash.port)
+                            
+                            logToLogstash('INFO', "Preparación de los repositorios completada ", config.logstash.host, config.logstash.port)
                         } catch (Exception e) {
                             logToLogstash('ERROR', "Error en la preparación de repositorios: ${e.message}", config.logstash.host, config.logstash.port)
                             error("Falló la preparación de repositorios")
+                        }
+                    }
+                }
+            }
+            stage('Construir Imágenes Docker') {
+                steps {
+                    script {
+                        try {
+                            def deploymentData = readJSON text: params.CONFIG_JSON
+                            logToLogstash('INFO', "Iniciando la construcción de imágenes Docker", deploymentData.logstash.host, deploymentData.logstash.port)
+                        
+                        
+
+                            // Construir imágenes solo si "build" es true y por cada directorio de Dockerfile
+                            deploymentData.repos.each { repo ->
+                                if (repo.build) {
+                                    repo.dockerfileDirs.each { dockerfileDir ->
+                                        logToLogstash('INFO', "Construyendo imagen Docker para ${repo.name} en ${repo.dir}/${dockerfileDir}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                        buildDockerImage(dockerfileDir, "${repo.dir}/${dockerfileDir}",  
+                                        deploymentData.logstash.host, 
+                                        deploymentData.logstash.port,
+                                        deploymentData.docker.imagePrefix)
+                                    }
+                                } else {
+                                    logToLogstash('INFO', "Saltando construcción de imagen Docker para ${repo.name}",  deploymentData.logstash.host, deploymentData.logstash.port)
+                                }
+                            }
+
+                            
+                            logToLogstash('INFO', "Construcción de imágenes Docker completada",  deploymentData.logstash.host, deploymentData.logstash.port)
+                        } catch (Exception e) {
+                            logToLogstash('ERROR', "Error en la construcción de imágenes Docker: ${e.message}", deploymentData.logstash.host, deploymentData.logstash.port)
+                            error("Falló la construcción de imágenes Docker")
                         }
                     }
                 }
@@ -64,31 +96,31 @@
         }
     }
 
-    def buildDockerImage(service, dir) {
+    def buildDockerImage(service, dir, host, port, docker_image_prefix) {
         try {
-            sh "docker build -t ${DOCKER_IMAGE_PREFIX}-${service}:latest -f ${dir}/Dockerfile ${dir}"
-            logToLogstash('INFO', "Imagen Docker para ${service} construida con éxito")
+            sh "docker build -t ${docker_image_prefix}-${service}:latest -f ${dir}/Dockerfile ${dir}"
+            logToLogstash('INFO', "Imagen Docker para ${service} construida con éxito", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al construir la imagen Docker para ${service}: ${e.message}")
+            logToLogstash('ERROR', "Error al construir la imagen Docker para ${service}: ${e.message}", host, port)
             throw e
         }
     }
 
-    def tagAndPushDockerImage(service) {
+    def tagAndPushDockerImage(service, host, port) {
         def imageName       = "${DOCKER_IMAGE_PREFIX}-${service}"
         def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
 
         try {
             sh "docker tag ${imageName}:latest ${taggedImageName}"
-            logToLogstash('INFO', "Imagen Docker ${taggedImageName} etiquetada con éxito")
+            logToLogstash('INFO', "Imagen Docker ${taggedImageName} etiquetada con éxito", host, port)
 
             withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
                 sh "echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}"
                 sh "docker push ${taggedImageName}"
-                logToLogstash('INFO', "Imagen Docker ${taggedImageName} publicada con éxito")
+                logToLogstash('INFO', "Imagen Docker ${taggedImageName} publicada con éxito", host, port)
             }
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al publicar la imagen Docker ${taggedImageName}: ${e.message}")
+            logToLogstash('ERROR', "Error al publicar la imagen Docker ${taggedImageName}: ${e.message}", host, port)
             throw e
         }
     }
@@ -96,10 +128,10 @@
     def getGitCommitHash(repoDir) {
         try {
             def commitHash = sh(returnStdout: true, script: "cd ${repoDir} && git log -1 --pretty=format:%h").trim()
-            logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}")
+            logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}", host, port)
             return commitHash
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al obtener el hash del commit: ${e.message}")
+            logToLogstash('ERROR', "Error al obtener el hash del commit: ${e.message}", host, port)
             throw e
         }
     }
@@ -107,15 +139,15 @@
     def getCurrentDate() {
         try {
             def currentDate = new Date().format('yyyyMMdd')
-            logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}")
+            logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}", host, port)
             return currentDate
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al obtener la fecha actual: ${e.message}")
+            logToLogstash('ERROR', "Error al obtener la fecha actual: ${e.message}", host, port)
             throw e
         }
     }
 
-    def updateDockerComposeTags() {
+    def updateDockerComposeTags(host, port) {
         try {
             def composeFilePath   = "${DOCKER_FILES_DIR}/docker-compose.yml"
             def composeFile       = readFile composeFilePath
@@ -124,16 +156,16 @@
                 return "${serviceName}:${DOCKER_IMAGE_TAG}"
             })
             writeFile file: composeFilePath, text: updatedComposeFile
-            logToLogstash('INFO', "Tags en docker-compose.yml actualizados con éxito")
+            logToLogstash('INFO', "Tags en docker-compose.yml actualizados con éxito", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al actualizar tags en docker-compose.yml: ${e.message}")
+            logToLogstash('ERROR', "Error al actualizar tags en docker-compose.yml: ${e.message}", host, port)
             throw e
         }
     }
 
-    def stopExistingContainers() {
+    def stopExistingContainers(host, port) {
         try {
-            logToLogstash('INFO', "Deteniendo y eliminando contenedores existentes que utilizan imágenes antiguas")
+            logToLogstash('INFO', "Deteniendo y eliminando contenedores existentes que utilizan imágenes antiguas", host, port)
             def containersToRemove = []
 
             // Usar el patrón de nombres proporcionado: 'docker-files-*'
@@ -154,13 +186,13 @@
             if (containersToRemove) {
                 containersToRemove.unique().each { containerId ->
                     sh "docker rm -f ${containerId}"
-                    logToLogstash('INFO', "Contenedor ${containerId} detenido y eliminado")
+                    logToLogstash('INFO', "Contenedor ${containerId} detenido y eliminado", host, port)
                 }
             } else {
-                logToLogstash('INFO', "No se encontraron contenedores para detener")
+                logToLogstash('INFO', "No se encontraron contenedores para detener", host, port)
             }
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al detener contenedores existentes: ${e.message}")
+            logToLogstash('ERROR', "Error al detener contenedores existentes: ${e.message}", host, port)
             throw e
         }
     }
@@ -168,14 +200,14 @@
     def startNewDeployment() {
         try {
             sh "docker compose -f ${DOCKER_FILES_DIR}/docker-compose.yml up -d"
-            logToLogstash('INFO', "Nuevo despliegue iniciado con éxito")
+            logToLogstash('INFO', "Nuevo despliegue iniciado con éxito", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al iniciar el nuevo despliegue: ${e.message}")
+            logToLogstash('ERROR', "Error al iniciar el nuevo despliegue: ${e.message}", host, port)
             throw e
         }
     }
 
-    def commitAndPushChanges(repoDir, fileName, commitMessage) {
+    def commitAndPushChanges(repoDir, fileName, commitMessage, host, port) {
         try {
             withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                 def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
@@ -198,54 +230,54 @@
                 }
             }
 
-            logToLogstash('INFO', "Commit y push de cambios completado en ${fileName}")
+            logToLogstash('INFO', "Commit y push de cambios completado en ${fileName}", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
+            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}", host, port)
             throw e
         }
     }
 
-    def rollbackChanges(repoDir) {
+    def rollbackChanges(repoDir, host, port) {
         try {
             if (!fileExists(repoDir)) {
-                logToLogstash('ERROR', "El directorio ${repoDir} no existe")
+                logToLogstash('ERROR', "El directorio ${repoDir} no existe", host, port)
                 return
             }
 
-            logToLogstash('ERROR', "Revirtiendo cambios en ${repoDir} debido a fallo en despliegue")
+            logToLogstash('ERROR', "Revirtiendo cambios en ${repoDir} debido a fallo en despliegue", host, port)
 
             dir(repoDir) {
                 // Capturar código de salida de 'git reset'
                 def resetExitCode = sh(script: 'git reset --hard HEAD', returnStatus: true)
                 if (resetExitCode != 0) {
-                    logToLogstash('ERROR', "git reset falló con código: ${resetExitCode}")
+                    logToLogstash('ERROR', "git reset falló con código: ${resetExitCode}", host, port)
                     return
                 }
 
                 // Capturar código de salida de 'git clean'
                 def cleanExitCode = sh(script: 'git clean -fd', returnStatus: true)
                 if (cleanExitCode != 0) {
-                    logToLogstash('ERROR', "git clean falló con código: ${cleanExitCode}")
+                    logToLogstash('ERROR', "git clean falló con código: ${cleanExitCode}", host, port)
                     return
                 }
 
                 // Capturar código de salida de 'docker compose'
                 def dockerExitCode = sh(script: "docker compose -f docker-compose.yml up -d", returnStatus: true)
                 if (dockerExitCode != 0) {
-                    logToLogstash('ERROR', "docker compose falló con código: ${dockerExitCode}")
+                    logToLogstash('ERROR', "docker compose falló con código: ${dockerExitCode}", host, port)
                     return
                 }
             }
 
-            logToLogstash('INFO', "Cambios revertidos y contenedores restaurados")
+            logToLogstash('INFO', "Cambios revertidos y contenedores restaurados", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al revertir cambios: ${e.message}")
+            logToLogstash('ERROR', "Error al revertir cambios: ${e.message}", host, port)
             throw e
         }
     }
 
 
-    def formatTimeDifference(startTime, endTime) {
+    def formatTimeDifference(startTime, endTime, host, port) {
         def duration = (endTime - startTime) as long
         try {
             def hours = Math.floorDiv(duration, 1000 * 60 * 60) % 24
@@ -255,23 +287,23 @@
             def formattedTime = String.format("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
             return formattedTime
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al calcular la diferencia de tiempo: ${e.message}")
+            logToLogstash('ERROR', "Error al calcular la diferencia de tiempo: ${e.message}", host, port)
             throw e
         }
     }
 
-    def cleanGitRepo(repoDir) {
+    def cleanGitRepo(repoDir, host, port) {
         dir(repoDir) {
             sh 'git reset --hard'
             sh 'git clean -fd'
-            logToLogstash('INFO', "Repositorio ${repoDir} limpiado con éxito")
+            logToLogstash('INFO', "Repositorio ${repoDir} limpiado con éxito", host, port)
         }
     }
 
 
-    def deleteOldDockerImages() {
+    def deleteOldDockerImages( host, port) {
         try {
-            logToLogstash('INFO', "Iniciando la eliminación de imágenes antiguas")
+            logToLogstash('INFO', "Iniciando la eliminación de imágenes antiguas", host, port)
             def startTime = System.currentTimeMillis() as long
 
             def services = ['vote', 'result', 'worker', 'seed-data']
@@ -300,20 +332,20 @@
                 imagesToDelete.unique().each { imageId ->
                     try {
                         sh "docker rmi -f ${imageId}"
-                        logToLogstash('INFO', "Imagen ${imageId} eliminada")
+                        logToLogstash('INFO', "Imagen ${imageId} eliminada", host, port)
                     } catch (Exception e) {
-                        logToLogstash('ERROR', "Error al eliminar la imagen ${imageId}: ${e.message}")
+                        logToLogstash('ERROR', "Error al eliminar la imagen ${imageId}: ${e.message}", host, port)
                     }
                 }
             } else {
-                logToLogstash('INFO', "No hay imágenes antiguas para eliminar")
+                logToLogstash('INFO', "No hay imágenes antiguas para eliminar", host, port)
             }
 
             def endTime = System.currentTimeMillis() as long
             def formattedDuration = formatTimeDifference(startTime, endTime)
-            logToLogstash('INFO', "Eliminación de imágenes antiguas completada en ${formattedDuration}")
+            logToLogstash('INFO', "Eliminación de imágenes antiguas completada en ${formattedDuration}", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al eliminar imágenes antiguas: ${e.message}")
+            logToLogstash('ERROR', "Error al eliminar imágenes antiguas: ${e.message}", host, port)
             throw e
         }
     }
