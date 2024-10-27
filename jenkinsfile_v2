@@ -69,6 +69,48 @@
                     }
                 }
             }
+            stage('Generar y Publicar Imágenes con Tag') {
+                steps {
+                    script {
+                        try {
+                            // Leer el JSON desde el parámetro
+                            def deploymentData = readJSON text: params.CONFIG_JSON
+                            
+                            // Iniciar el proceso y registrar en Logstash
+                            logToLogstash('INFO', "Iniciando la generación y publicación de imágenes con tag", deploymentData.logstash.host, deploymentData.logstash.port)
+                            
+
+                            // Construir y publicar las imágenes Docker solo para los servicios especificados
+                            deploymentData.repos.each { repo ->
+                                if (repo.build) {
+                                    repo.dockerfileDirs.each { dockerfileDir ->
+                                        def commitHash = getGitCommitHash(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
+                                        def currentDate = getCurrentDate(deploymentData.logstash.host, deploymentData.logstash.port)
+                                        def docker_image_tag  = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
+                                        logToLogstash('INFO', "Tag de la imagen Docker generado: ${docker_image_tag}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                        logToLogstash('INFO', "Generando y publicando imagen Docker para ${deploymentData.docker.imagePrefix}/${dockerfileDir}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                        tagAndPushDockerImage(deploymentData.docker.imagePrefix, 
+                                        dockerfileDir, 
+                                        docker_image_tag,  
+                                        deploymentData.docker.registry,
+                                        deploymentData.logstash.host, 
+                                        deploymentData.logstash.port)
+                                    }
+                                } else {
+                                    logToLogstash('INFO', "Saltando generación y publicación de imagen Docker para ${repo.name}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                }
+                            }
+                            // Finalizar el proceso
+                            logToLogstash('INFO', "Generación y publicación de imágenes completada", deploymentData.logstash.host, deploymentData.logstash.port)
+                        } catch (Exception e) {
+                            // Registrar cualquier error y detener el pipeline
+                            logToLogstash('ERROR', "Error en la generación y publicación de imágenes: ${e.message}", deploymentData.logstash.host, deploymentData.logstash.port)
+                            error("Falló la generación y publicación de imágenes")
+                        }
+                    }
+                }
+            }
+
         }
     }
 
@@ -106,16 +148,16 @@
         }
     }
 
-    def tagAndPushDockerImage(service, host, port) {
-        def imageName       = "${DOCKER_IMAGE_PREFIX}-${service}"
-        def taggedImageName = "${DOCKER_REGISTRY}/${imageName}:${DOCKER_IMAGE_TAG}"
+    def tagAndPushDockerImage(imagePrefix, service, docker_image_tag, registry, host, port) {
+        def imageName       = "${imagePrefix}-${service}"
+        def taggedImageName = "${registry}/${imageName}:${docker_image_tag}"
 
         try {
             sh "docker tag ${imageName}:latest ${taggedImageName}"
             logToLogstash('INFO', "Imagen Docker ${taggedImageName} etiquetada con éxito", host, port)
 
             withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
-                sh "echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${DOCKER_REGISTRY}"
+                sh "echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${registry}"
                 sh "docker push ${taggedImageName}"
                 logToLogstash('INFO', "Imagen Docker ${taggedImageName} publicada con éxito", host, port)
             }
@@ -125,7 +167,7 @@
         }
     }
 
-    def getGitCommitHash(repoDir) {
+    def getGitCommitHash(repoDir, host, port) {
         try {
             def commitHash = sh(returnStdout: true, script: "cd ${repoDir} && git log -1 --pretty=format:%h").trim()
             logToLogstash('INFO', "Hash del commit obtenido: ${commitHash}", host, port)
@@ -136,7 +178,7 @@
         }
     }
 
-    def getCurrentDate() {
+    def getCurrentDate(host, port) {
         try {
             def currentDate = new Date().format('yyyyMMdd')
             logToLogstash('INFO', "Fecha actual obtenida: ${currentDate}", host, port)
