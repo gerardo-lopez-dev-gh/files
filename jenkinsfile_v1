@@ -97,29 +97,6 @@
                 }
             }
 
-            stage('Commit y Push de Cambios') {
-                when {
-                    expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-                }
-                steps {
-                    script {
-                        try {
-                            logToLogstash('INFO', "Iniciando el commit y push de cambios")
-                            def startTime = System.currentTimeMillis() as long
-
-                            commitAndPushChanges(DOCKER_FILES_DIR, 'docker-compose.yml', "Actualizado docker-compose.yml con tag ${DOCKER_IMAGE_TAG}")
-
-                            def endTime = System.currentTimeMillis() as long
-                            def formattedDuration = formatTimeDifference(startTime, endTime)
-                            logToLogstash('INFO', "Commit y push de cambios completado en ${formattedDuration}")
-                        } catch (Exception e) {
-                            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
-                            error("Falló el commit y push de cambios")
-                        }
-                    }
-                }
-            }
-
             stage('Despliegue') {
                 steps {
                     script {
@@ -150,6 +127,31 @@
                     }
                 }
             }
+
+            stage('Commit y Push de Cambios') {
+                when {
+                    expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+                }
+                steps {
+                    script {
+                        try {
+                            logToLogstash('INFO', "Iniciando el commit y push de cambios")
+                            def startTime = System.currentTimeMillis() as long
+
+                            commitAndPushChanges(DOCKER_FILES_DIR, 'docker-compose.yml', "Actualizado docker-compose.yml con tag ${DOCKER_IMAGE_TAG}")
+
+                            def endTime = System.currentTimeMillis() as long
+                            def formattedDuration = formatTimeDifference(startTime, endTime)
+                            logToLogstash('INFO', "Commit y push de cambios completado en ${formattedDuration}")
+                        } catch (Exception e) {
+                            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}")
+                            error("Falló el commit y push de cambios")
+                        }
+                    }
+                }
+            }
+
+            
             
         }
 

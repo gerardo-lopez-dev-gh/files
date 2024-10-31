@@ -100,10 +100,14 @@
                             // Iniciar el proceso y registrar en Logstash
                             logToLogstash('INFO', "Iniciando la generación y publicación de imágenes con tag", deploymentData.logstash.host, deploymentData.logstash.port)
                             
+                            cleanGitRepo(env.NO_BUILD_REPO_DIR, deploymentData.logstash.host, deploymentData.logstash.port)
+                            logToLogstash('INFO', "Repositorio ${env.NO_BUILD_REPO_DIR} limpiado, actualizando docker-compose.yml", deploymentData.logstash.host, deploymentData.logstash.port)
 
                             // Construir y publicar las imágenes Docker solo para los servicios especificados
                             deploymentData.repos.each { repo ->
+                                   
                                 if (repo.build) {
+
                                     def commitHash = getGitCommitHash(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
                                     def currentDate = getCurrentDate(deploymentData.logstash.host, deploymentData.logstash.port)
                                     def docker_image_tag  = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
@@ -118,16 +122,12 @@
                                         deploymentData.logstash.host, 
                                         deploymentData.logstash.port)
 
-                                        // Limpiar el repositorio
+                                          // Actualizar tags en docker-compose.yml
+                                    updateDockerComposeTags( dockerfileDir,  deploymentData.docker.imagePrefix, env.NO_BUILD_REPO_DIR, deploymentData.logstash.host, deploymentData.logstash.port, docker_image_tag)
                                         
 
                                         
-                                    }
-                                    cleanGitRepo(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
-                                    logToLogstash('INFO', "Repositorio ${repo.dir} limpiado, actualizando docker-compose.yml", deploymentData.logstash.host, deploymentData.logstash.port)
-
-                                    // Actualizar tags en docker-compose.yml
-                                    updateDockerComposeTags( deploymentData.docker.imagePrefix, env.NO_BUILD_REPO_DIR, deploymentData.logstash.host, deploymentData.logstash.port, docker_image_tag)
+                                    }                            
 
                                     // Detener contenedores existentes
                                     stopExistingContainers(deploymentData.logstash.host, deploymentData.logstash.port)
@@ -137,7 +137,7 @@
 
                                 } 
                             }
-                            // Construir y publicar las imágenes Docker solo para los servicios especificados
+                           
                             
 
                             // Finalizar el proceso
@@ -163,8 +163,6 @@
                             // Iterar sobre los repositorios en el JSON
                             deploymentData.repos.each { repo ->
                                 if (!repo.build) {
-                                    cleanGitRepo(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
-                                   
                                     //Iniciar despliegue de nuevas imágenes
                                     startNewDeployment(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
                                    
@@ -260,21 +258,30 @@
         }
     }
 
-    def updateDockerComposeTags(imagePrefix, repoDir, host, port, docker_image_tag) {
+    def updateDockerComposeTags(servicio, imagePrefix, repoDir, host, port, docker_image_tag) {
         try {
             def composeFilePath = "${repoDir}/docker-compose.yml"
             def composeFile = readFile composeFilePath
-            def updatedComposeFile = composeFile.replaceAll("${imagePrefix}-\\w+:.*", { match ->
-                def serviceName = match.split(':')[0]
-                return "${serviceName}:${docker_image_tag}"
+            def updatedComposeFile = composeFile.replaceAll("${imagePrefix}-${servicio}:.*", { match ->
+            def serviceName = match.split(':')[0]
+            return "${serviceName}:${docker_image_tag}"
             })
+
+
+            // Escribe el archivo actualizado
             writeFile file: composeFilePath, text: updatedComposeFile
+
+            // Imprime el contenido actualizado del archivo en el log de Jenkins
+            echo "Contenido actualizado de docker-compose.yml:\n${updatedComposeFile}"
+
+            // Loggea en Logstash indicando éxito
             logToLogstash('INFO', "Tags en docker-compose.yml actualizados con éxito", host, port)
         } catch (Exception e) {
             logToLogstash('ERROR', "Error al actualizar tags en docker-compose.yml: ${e.message}", host, port)
             throw e
         }
     }
+
 
 
     def stopExistingContainers(host, port) {
