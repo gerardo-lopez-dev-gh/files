@@ -90,7 +90,7 @@
                     }
                 }
             }
-            stage('Publicar Imágenes con Tag y Desplegar') {
+            stage('Publicar Imágenes con Tag') {
                 steps {
                     script {
                             // Leer el JSON desde el parámetro
