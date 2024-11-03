@@ -47,7 +47,8 @@
                     if (noBuildRepo) {
                         env.NO_BUILD_REPO_DIR = noBuildRepo.dir
                         env.NO_BUILD_REPO_URL = noBuildRepo.url
-
+                        env.NO_BUILD_REPO_USER = noBuildRepo.user
+                        env.NO_BUILD_REPO_CORREO = noBuildRepo.correo
                         logToLogstash('INFO', "Datos del repositorio sin build guardados: ${noBuildRepo.dir}, ${noBuildRepo.url}", config.logstash.host, config.logstash.port)
                     } else {
                         logToLogstash('INFO', "No se encontró ningún repositorio con build=false", config.logstash.host, config.logstash.port)
@@ -179,9 +180,46 @@
                 }
             }
 
+            stage('Commit y Push de Cambios') {
+                when {
+                    expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+                }
+                steps {
+                    script {
+                        def deploymentData = readJSON text: params.CONFIG_JSON
+                        try {
+                            logToLogstash('INFO', "Iniciando el commit y push de cambios",  deploymentData.logstash.host, deploymentData.logstash.port)
+                            commitAndPushChanges(env.NO_BUILD_REPO_DIR, env.NO_BUILD_REPO_URL, env.NO_BUILD_REPO_USER, env.NO_BUILD_REPO_CORREO, 'docker-compose.yml', "Actualizado docker-compose.yml con tag de imagen", deploymentData.logstash.host, deploymentData.logstash.port)
+                            logToLogstash('INFO', "Commit y push de cambios completado",  deploymentData.logstash.host, deploymentData.logstash.port)
+                        } catch (Exception e) {
+                            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}", deploymentData.logstash.host, deploymentData.logstash.port)
+                            error("Falló el commit y push de cambios")
+                        }
+                    }
+                }
+            }
+
 
         }
+        post {
+            failure {
+                script {
+                    
+                    def deploymentData = readJSON text: params.CONFIG_JSON
+                    logToLogstash('INFO', "Iniciando Rollback", deploymentData.logstash.host, deploymentData.logstash.port)
+                    stopExistingContainers(deploymentData.logstash.host, deploymentData.logstash.port)
+                    logToLogstash('ERROR', "El despliegue falló. Revirtiendo cambios en docker-compose.yml", deploymentData.logstash.host, deploymentData.logstash.port)
+                    withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                        logToLogstash('INFO', "NEXUS LOGIN", deploymentData.logstash.host, deploymentData.logstash.port)
+                        rollbackChanges(env.NO_BUILD_REPO_DIR, deploymentData.logstash.host, deploymentData.logstash.port)
+                    }
+                    
+                }
+            }
+        }
     }
+    
+    
 
     // Funciones auxiliares
     def cloneOrUpdateRepo(repoDir, repoUrl, host, port) {
@@ -271,9 +309,6 @@
             // Escribe el archivo actualizado
             writeFile file: composeFilePath, text: updatedComposeFile
 
-            // Imprime el contenido actualizado del archivo en el log de Jenkins
-            echo "Contenido actualizado de docker-compose.yml:\n${updatedComposeFile}"
-
             // Loggea en Logstash indicando éxito
             logToLogstash('INFO', "Tags en docker-compose.yml actualizados con éxito", host, port)
         } catch (Exception e) {
@@ -328,35 +363,43 @@
         }
     }
 
-    def commitAndPushChanges(repoDir, fileName, commitMessage, host, port) {
-        try {
-            withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                def repoUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/gerardo-lopez-dev-gh/docker-files.git"
+    def commitAndPushChanges(repoDir, repoUrl, name, correo,  fileName, commitMessage, host, port) {
+    try {
+        withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+            logToLogstash('INFO', "Commit y push de cambios en ${repoDir}", host, port)
+            dir(repoDir) {
+                echo "Directorio actual: ${pwd()}"
+                
+                sh "git add ${fileName}"
+                // Configurar identidad del usuario
+                sh "git config user.email ${correo}"
+                sh "git config user.name ${name}"
 
-                dir(repoDir) {
-                    echo "Directorio actual: ${pwd()}"
-                    
-                    sh "git add ${fileName}"
-
-                    def remoteUrl = sh(returnStdout: true, script: 'git config --get remote.origin.url').trim()
-                    if (!remoteUrl) {
-                        sh "git remote add origin ${repoUrl}"
-                    } else {
-                        sh "git remote set-url origin ${repoUrl}"
-                    }
-
-                    sh "git add -A"
-                    sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
-                    sh "git push origin main"
+                def remoteUrl = sh(returnStdout: true, script: 'git config --get remote.origin.url').trim()
+                if (!remoteUrl) {
+                    sh "git remote add origin ${repoUrl}"
+                } else {
+                    sh "git remote set-url origin ${repoUrl}"
                 }
-            }
 
-            logToLogstash('INFO', "Commit y push de cambios completado en ${fileName}", host, port)
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}", host, port)
-            throw e
+                
+
+                sh "git add -A"
+                sh "git commit -m '${commitMessage}' || echo 'No changes to commit'"
+                
+                // Incluir usuario y contraseña en la URL para autenticación
+                sh "git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/${name}/${repoDir}.git main"
+
+            }
         }
+
+        logToLogstash('INFO', "Commit y push de cambios completado en ${fileName}", host, port)
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error en el commit y push de cambios: ${e.message}", host, port)
+        throw e
     }
+}
+
 
     def rollbackChanges(repoDir, host, port) {
         try {
@@ -383,7 +426,7 @@
                 }
 
                 // Capturar código de salida de 'docker compose'
-                def dockerExitCode = sh(script: "docker compose -f docker-compose.yml up -d", returnStatus: true)
+                def dockerExitCode = sh(script: "docker compose -f ${repoDir}/docker-compose.yml up -d", returnStatus: true)
                 if (dockerExitCode != 0) {
                     logToLogstash('ERROR', "docker compose falló con código: ${dockerExitCode}", host, port)
                     return
