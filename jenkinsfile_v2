@@ -426,7 +426,7 @@
                 }
 
                 // Capturar código de salida de 'docker compose'
-                def dockerExitCode = sh(script: "docker compose -f ${repoDir}/docker-compose.yml up -d", returnStatus: true)
+                def dockerExitCode = sh(script: "docker compose -f docker-compose.yml up -d", returnStatus: true)
                 if (dockerExitCode != 0) {
                     logToLogstash('ERROR', "docker compose falló con código: ${dockerExitCode}", host, port)
                     return
