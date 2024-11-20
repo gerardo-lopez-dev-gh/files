@@ -10,6 +10,26 @@
         }
 
         stages {
+
+            stage('Guardar datos de repositorio sin build') {
+                steps {
+                    script {
+                        def config = readJSON text: params.CONFIG_JSON
+                        def noBuildRepo = config.repos.find { !it.build }
+
+                        if (noBuildRepo) {
+                            env.NO_BUILD_REPO_DIR = noBuildRepo.dir
+                            env.NO_BUILD_REPO_URL = noBuildRepo.url
+                            env.NO_BUILD_REPO_USER = noBuildRepo.user
+                            env.NO_BUILD_REPO_CORREO = noBuildRepo.correo
+                            env.INDEX_LOG = config.logstash.index
+                            logToLogstash('INFO', "Datos del repositorio sin build guardados: ${noBuildRepo.dir}, ${noBuildRepo.url}", config.logstash.host, config.logstash.port)
+                        } else {
+                            logToLogstash('INFO', "No se encontró ningún repositorio con build=false", config.logstash.host, config.logstash.port)
+                        }
+                    }
+                }
+            }
             stage('Preparar Repositorios') {
                 steps {
                     script {
@@ -17,7 +37,7 @@
                         try {
                             
                             def repos = config.repos
-
+                            
                             logToLogstash('INFO', "Iniciando la preparación de los repositorios", config.logstash.host, config.logstash.port)
 
                             
@@ -27,7 +47,7 @@
                                 cloneOrUpdateRepo(repo.dir, repo.url, config.logstash.host, config.logstash.port)
                                 logToLogstash('INFO', "Repositorio ${repo.dir} preparado con éxito.", config.logstash.host, config.logstash.port)
                             }
-
+                          
                             
                             logToLogstash('INFO', "Preparación de los repositorios completada ", config.logstash.host, config.logstash.port)
                         } catch (Exception e) {
@@ -38,24 +58,7 @@
                 }
             }
 
-            stage('Guardar datos de repositorio sin build') {
-            steps {
-                script {
-                    def config = readJSON text: params.CONFIG_JSON
-                    def noBuildRepo = config.repos.find { !it.build }
-
-                    if (noBuildRepo) {
-                        env.NO_BUILD_REPO_DIR = noBuildRepo.dir
-                        env.NO_BUILD_REPO_URL = noBuildRepo.url
-                        env.NO_BUILD_REPO_USER = noBuildRepo.user
-                        env.NO_BUILD_REPO_CORREO = noBuildRepo.correo
-                        logToLogstash('INFO', "Datos del repositorio sin build guardados: ${noBuildRepo.dir}, ${noBuildRepo.url}", config.logstash.host, config.logstash.port)
-                    } else {
-                        logToLogstash('INFO', "No se encontró ningún repositorio con build=false", config.logstash.host, config.logstash.port)
-                    }
-                }
-            }
-        }
+            
             stage('Construir Imágenes Docker') {
                 steps {
                     script {
@@ -225,6 +228,7 @@
     def cloneOrUpdateRepo(repoDir, repoUrl, host, port) {
         try {
             withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+               
                 if (fileExists(repoDir)) {
                     if (fileExists("${repoDir}/.git")) {
                         dir(repoDir) {
@@ -518,7 +522,8 @@
             timestamp: timestamp,
             deployment_id: deploymentId,
             nivel: logLevel,
-            mensaje: message
+            mensaje: message,
+            index: env.INDEX_LOG
         ]
 
         // Convertir el mensaje a un string JSON
