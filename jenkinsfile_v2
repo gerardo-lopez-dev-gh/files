@@ -47,7 +47,7 @@
                                 cloneOrUpdateRepo(repo.dir, repo.url, config.logstash.host, config.logstash.port)
                                 logToLogstash('INFO', "Repositorio ${repo.dir} preparado con éxito.", config.logstash.host, config.logstash.port)
                             }
-                          
+                            
                             
                             logToLogstash('INFO', "Preparación de los repositorios completada ", config.logstash.host, config.logstash.port)
                         } catch (Exception e) {
@@ -62,30 +62,31 @@
             stage('Construir Imágenes Docker') {
                 steps {
                     script {
-                            def deploymentData = readJSON text: params.CONFIG_JSON
+                        def deploymentData = readJSON text: params.CONFIG_JSON
                         try {
-                            
                             logToLogstash('INFO', "Iniciando la construcción de imágenes Docker", deploymentData.logstash.host, deploymentData.logstash.port)
-                        
-                        
 
-                            // Construir imágenes solo si "build" es true y por cada directorio de Dockerfile
                             deploymentData.repos.each { repo ->
                                 if (repo.build) {
-                                    repo.dockerfileDirs.each { dockerfileDir ->
-                                        logToLogstash('INFO', "Construyendo imagen Docker para ${repo.dir} en ${repo.dir}/${dockerfileDir}", deploymentData.logstash.host, deploymentData.logstash.port)
-                                        buildDockerImage(dockerfileDir, "${repo.dir}/${dockerfileDir}",  
-                                        deploymentData.logstash.host, 
-                                        deploymentData.logstash.port,
-                                        deploymentData.docker.imagePrefix)
+                                    if (repo.dockerfileDirs) {
+                                        // Caso 1: Repositorio con subcarpetas
+                                        repo.dockerfileDirs.each { dockerfileDir ->
+                                            def dockerfilePath = "${repo.dir}/${dockerfileDir}/Dockerfile"
+                                            logToLogstash('INFO', "Construyendo imagen Docker para ${repo.dir} en ${dockerfileDir}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                            buildDockerImage(dockerfileDir, dockerfilePath, deploymentData.logstash.host, deploymentData.logstash.port, deploymentData.docker.imagePrefix)
+                                        }
+                                    } else {
+                                        // Caso 2: Repositorio sin subcarpetas (Dockerfile en la raíz)
+                                        def dockerfilePath = "${repo.dir}/Dockerfile"
+                                        logToLogstash('INFO', "Construyendo imagen Docker para ${repo.dir} en la raíz", deploymentData.logstash.host, deploymentData.logstash.port)
+                                        buildDockerImage(repo.dir, dockerfilePath, deploymentData.logstash.host, deploymentData.logstash.port, deploymentData.docker.imagePrefix)
                                     }
                                 } else {
-                                    logToLogstash('INFO', "Saltando construcción de imagen Docker para ${repo.dir}",  deploymentData.logstash.host, deploymentData.logstash.port)
+                                    logToLogstash('INFO', "Saltando construcción de imagen Docker para ${repo.dir}", deploymentData.logstash.host, deploymentData.logstash.port)
                                 }
                             }
 
-                            
-                            logToLogstash('INFO', "Construcción de imágenes Docker completada",  deploymentData.logstash.host, deploymentData.logstash.port)
+                            logToLogstash('INFO', "Construcción de imágenes Docker completada", deploymentData.logstash.host, deploymentData.logstash.port)
                         } catch (Exception e) {
                             logToLogstash('ERROR', "Error en la construcción de imágenes Docker: ${e.message}", deploymentData.logstash.host, deploymentData.logstash.port)
                             error("Falló la construcción de imágenes Docker")
@@ -93,6 +94,7 @@
                     }
                 }
             }
+
             stage('Publicar Imágenes con Tag') {
                 steps {
                     script {
@@ -191,6 +193,7 @@
                     script {
                         def deploymentData = readJSON text: params.CONFIG_JSON
                         try {
+                            
                             logToLogstash('INFO', "Iniciando el commit y push de cambios",  deploymentData.logstash.host, deploymentData.logstash.port)
                             commitAndPushChanges(env.NO_BUILD_REPO_DIR, env.NO_BUILD_REPO_URL, env.NO_BUILD_REPO_USER, env.NO_BUILD_REPO_CORREO, 'docker-compose.yml', "Actualizado docker-compose.yml con tag de imagen", deploymentData.logstash.host, deploymentData.logstash.port)
                             logToLogstash('INFO', "Commit y push de cambios completado",  deploymentData.logstash.host, deploymentData.logstash.port)
@@ -226,38 +229,49 @@
 
     // Funciones auxiliares
     def cloneOrUpdateRepo(repoDir, repoUrl, host, port) {
-        try {
-            withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-               
-                if (fileExists(repoDir)) {
-                    if (fileExists("${repoDir}/.git")) {
-                        dir(repoDir) {
-                            sh 'git pull origin main'
-                        }
-                    } else {
-                        sh "rm -rf ${repoDir}"
-                        sh "git clone ${repoUrl} ${repoDir}"
+    try {
+        withCredentials([usernamePassword(credentialsId: 'github-credentials-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+            // Validar que repoDir no esté vacío
+            if (!repoDir?.trim()) {
+                logToLogstash('ERROR', "El valor de repoDir es inválido o está vacío", host, port)
+                throw new IllegalArgumentException("El valor de repoDir no puede estar vacío")
+            }
+
+            // Validar si el directorio existe
+            if (fileExists(repoDir)) {
+                if (fileExists("${repoDir}/.git")) {
+                    dir(repoDir) {
+                        logToLogstash('INFO', "Repositorio encontrado, actualizando...", host, port)
+                        sh 'git pull origin main'
                     }
                 } else {
-                    sh "git clone ${repoUrl} ${repoDir}"
+                    logToLogstash('INFO', "Directorio encontrado pero no es un repositorio Git. Eliminando...", host, port)
+                    sh "rm -rf ${repoDir}"
+                    sh "git clone ${repoUrl} "
                 }
+            } else {
+                logToLogstash('INFO', "Directorio no encontrado, clonando repositorio...", host, port)
+                sh "git clone ${repoUrl}"
             }
-            logToLogstash('INFO', "Repositorio ${repoDir} actualizado/clonado con éxito", host, port)
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error en la clonación o actualización del repositorio ${repoDir}: ${e.message}", host, port)
-            throw e
         }
+        logToLogstash('INFO', "Repositorio ${repoDir} actualizado/clonado con éxito", host, port)
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error en la clonación o actualización del repositorio ${repoDir}: ${e.message}", host, port)
+        throw e
     }
+}
 
-    def buildDockerImage(service, dir, host, port, docker_image_prefix) {
+    def buildDockerImage(service, dockerfilePath, host, port, docker_image_prefix) {
         try {
-            sh "docker build -t ${docker_image_prefix}-${service}:latest -f ${dir}/Dockerfile ${dir}"
+            def buildContext = dockerfilePath.contains('/Dockerfile') ? dockerfilePath.replace('/Dockerfile', '') : dockerfilePath
+            sh "docker build -t ${docker_image_prefix}-${service}:latest -f ${dockerfilePath} ${buildContext}"
             logToLogstash('INFO', "Imagen Docker para ${service} construida con éxito", host, port)
         } catch (Exception e) {
             logToLogstash('ERROR', "Error al construir la imagen Docker para ${service}: ${e.message}", host, port)
             throw e
         }
     }
+
 
     def tagAndPushDockerImage(imagePrefix, service, docker_image_tag, registry, host, port) {
         def imageName       = "${imagePrefix}-${service}"
@@ -359,7 +373,7 @@
 
     def startNewDeployment(repoDir, host, port) {
         try {
-            sh "docker compose -f ${repoDir}/docker-compose.yml up -d"
+            sh "docker compose -f  ${repoDir}/docker-compose.yml up -d"
             logToLogstash('INFO', "Nuevo despliegue iniciado con éxito", host, port)
         } catch (Exception e) {
             logToLogstash('ERROR', "Error al iniciar el nuevo despliegue: ${e.message}", host, port)
