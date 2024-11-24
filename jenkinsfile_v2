@@ -68,18 +68,33 @@
 
                             deploymentData.repos.each { repo ->
                                 if (repo.build) {
-                                    if (repo.dockerfileDirs) {
-                                        // Caso 1: Repositorio con subcarpetas
-                                        repo.dockerfileDirs.each { dockerfileDir ->
-                                            def dockerfilePath = "${repo.dir}/${dockerfileDir}/Dockerfile"
-                                            logToLogstash('INFO', "Construyendo imagen Docker para ${repo.dir} en ${dockerfileDir}", deploymentData.logstash.host, deploymentData.logstash.port)
-                                            buildDockerImage(dockerfileDir, dockerfilePath, deploymentData.logstash.host, deploymentData.logstash.port, deploymentData.docker.imagePrefix)
+                                    def directories = repo.dockerfileDirs ?: ["."] // Si no está definido, asume raíz (".")
+                                    directories.each { dockerfileDir ->
+                                        // Limpia el nombre del servicio
+                                        def cleanServiceName = dockerfileDir == "." ? "root" : dockerfileDir.replaceAll(/[^a-zA-Z0-9_-]/, '')
+
+                                        // Define la ruta al Dockerfile
+                                        def dockerfilePath
+                                        if (repo.dockerfileDirs) {
+                                            dockerfilePath = dockerfileDir == "." ? "${repo.dir}/Dockerfile" : "${repo.dir}/${dockerfileDir}/Dockerfile"
+                                        } else {
+                                            dockerfilePath = "${repo.dir}/Dockerfile"
                                         }
-                                    } else {
-                                        // Caso 2: Repositorio sin subcarpetas (Dockerfile en la raíz)
-                                        def dockerfilePath = "${repo.dir}/Dockerfile"
-                                        logToLogstash('INFO', "Construyendo imagen Docker para ${repo.dir} en la raíz", deploymentData.logstash.host, deploymentData.logstash.port)
-                                        buildDockerImage(repo.dir, dockerfilePath, deploymentData.logstash.host, deploymentData.logstash.port, deploymentData.docker.imagePrefix)
+
+                                        // Verifica si el Dockerfile existe
+                                        if (!fileExists(dockerfilePath)) {
+                                            logToLogstash('ERROR', "1- Dockerfile no encontrado en ${dockerfilePath}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                            error("Dockerfile no encontrado en ${dockerfilePath}")
+                                        }
+
+                                        // Construcción de la imagen
+                                        logToLogstash('INFO', "Construyendo imagen Docker para servicio: ${cleanServiceName}, usando Dockerfile en ${dockerfilePath}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                        try {
+                                            buildDockerImage(cleanServiceName, dockerfilePath, deploymentData.logstash.host, deploymentData.logstash.port, deploymentData.docker.imagePrefix)
+                                        } catch (Exception e) {
+                                            logToLogstash('ERROR', "Error al construir imagen Docker para servicio: ${cleanServiceName}: ${e.message}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                            throw e
+                                        }
                                     }
                                 } else {
                                     logToLogstash('INFO', "Saltando construcción de imagen Docker para ${repo.dir}", deploymentData.logstash.host, deploymentData.logstash.port)
@@ -94,6 +109,8 @@
                     }
                 }
             }
+
+
 
             stage('Publicar Imágenes con Tag') {
                 steps {
@@ -113,11 +130,11 @@
                             deploymentData.repos.each { repo ->
                                    
                                 if (repo.build) {
-
+                                    def directories = repo.dockerfileDirs ?: ["."]
                                     def commitHash = getGitCommitHash(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
                                     def currentDate = getCurrentDate(deploymentData.logstash.host, deploymentData.logstash.port)
                                     def docker_image_tag  = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
-                                    repo.dockerfileDirs.each { dockerfileDir ->
+                                    directories.each { dockerfileDir ->
                                         
                                         logToLogstash('INFO', "Tag de la imagen Docker generado: ${docker_image_tag}", deploymentData.logstash.host, deploymentData.logstash.port)
                                         logToLogstash('INFO', "Generando y publicando imagen Docker para ${deploymentData.docker.imagePrefix}/${dockerfileDir}", deploymentData.logstash.host, deploymentData.logstash.port)
@@ -262,35 +279,87 @@
 }
 
     def buildDockerImage(service, dockerfilePath, host, port, docker_image_prefix) {
-        try {
-            def buildContext = dockerfilePath.contains('/Dockerfile') ? dockerfilePath.replace('/Dockerfile', '') : dockerfilePath
-            sh "docker build -t ${docker_image_prefix}-${service}:latest -f ${dockerfilePath} ${buildContext}"
-            logToLogstash('INFO', "Imagen Docker para ${service} construida con éxito", host, port)
-        } catch (Exception e) {
-            logToLogstash('ERROR', "Error al construir la imagen Docker para ${service}: ${e.message}", host, port)
-            throw e
+    try {
+        // Validar variables de entrada
+        if (!service?.trim()) {
+            logToLogstash('ERROR', "El parámetro 'service' está vacío o es nulo", host, port)
+            error("El parámetro 'service' es obligatorio y no puede ser nulo.")
         }
+        if (!dockerfilePath?.trim()) {
+            logToLogstash('ERROR', "El parámetro 'dockerfilePath' está vacío o es nulo", host, port)
+            error("El parámetro 'dockerfilePath' es obligatorio y no puede ser nulo.")
+        }
+
+        def cleanServiceName = service == "." ? "root" : service.replaceAll(/[^a-zA-Z0-9_-]/, '')
+        def imageName = "${docker_image_prefix}-${cleanServiceName}"
+        
+        // Validar formato de dockerfilePath
+        def buildContext
+        if (dockerfilePath.contains('/Dockerfile')) {
+            buildContext = dockerfilePath.replace('/Dockerfile', '')
+        } else {
+            buildContext = dockerfilePath
+        }
+
+        if (!fileExists(dockerfilePath)) {
+            logToLogstash('ERROR', "Dockerfile no encontrado en la ruta: ${dockerfilePath}", host, port)
+            error("Dockerfile no encontrado en ${dockerfilePath}. Verifica la configuración.")
+        }
+
+        // Log de inicio de construcción
+        logToLogstash('INFO', "Iniciando la construcción de la imagen ${imageName}:latest usando ${dockerfilePath}", host, port)
+
+        // Construcción de la imagen Docker
+        sh """
+            docker build -t ${imageName}:latest -f ${dockerfilePath} ${buildContext}
+        """
+        logToLogstash('INFO', "Imagen Docker ${imageName}:latest construida con éxito", host, port)
+
+        // Validar si la imagen fue creada
+        def imageExists = sh(returnStdout: true, script: "docker images -q ${imageName}:latest").trim()
+        if (!imageExists) {
+            logToLogstash('ERROR', "La imagen ${imageName}:latest no fue creada correctamente", host, port)
+            error("La imagen ${imageName}:latest no fue creada correctamente.")
+        }
+
+    } catch (Exception e) {
+        logToLogstash('ERROR', "Error al construir la imagen Docker para ${service}: ${e.message}", host, port)
+        throw e
     }
+}
+
+
 
 
     def tagAndPushDockerImage(imagePrefix, service, docker_image_tag, registry, host, port) {
-        def imageName       = "${imagePrefix}-${service}"
-        def taggedImageName = "${registry}/${imageName}:${docker_image_tag}"
-
         try {
+            def cleanServiceName = service == "." ? "root" : service.replaceAll(/[^a-zA-Z0-9_-]/, '')
+            def imageName = "${imagePrefix}-${cleanServiceName}"
+            def taggedImageName = "${registry}/${imageName}:${docker_image_tag}"
+
+            // Etiquetar la imagen
             sh "docker tag ${imageName}:latest ${taggedImageName}"
             logToLogstash('INFO', "Imagen Docker ${taggedImageName} etiquetada con éxito", host, port)
 
+            // Publicar la imagen en Nexus
             withCredentials([usernamePassword(credentialsId: 'nexus-credentials-id', usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
                 sh "echo $NEXUS_PASSWORD | docker login -u $NEXUS_USERNAME --password-stdin http://${registry}"
                 sh "docker push ${taggedImageName}"
-                logToLogstash('INFO', "Imagen Docker ${taggedImageName} publicada con éxito", host, port)
+
+                // Verificar el push
+                def pushSuccess = sh(returnStatus: true, script: "docker manifest inspect ${taggedImageName}")
+                if (pushSuccess != 0) {
+                    error("Error al publicar la imagen ${taggedImageName} en Nexus.")
+                }
             }
+            logToLogstash('INFO', "Imagen Docker ${taggedImageName} publicada con éxito en Nexus", host, port)
         } catch (Exception e) {
             logToLogstash('ERROR', "Error al publicar la imagen Docker ${taggedImageName}: ${e.message}", host, port)
             throw e
         }
     }
+
+
 
     def getGitCommitHash(repoDir, host, port) {
         try {
@@ -318,22 +387,23 @@
         try {
             def composeFilePath = "${repoDir}/docker-compose.yml"
             def composeFile = readFile composeFilePath
-            def updatedComposeFile = composeFile.replaceAll("${imagePrefix}-${servicio}:.*", { match ->
-            def serviceName = match.split(':')[0]
-            return "${serviceName}:${docker_image_tag}"
-            })
+            def serviceName = servicio == "." ? "root" : servicio
 
+            // Reemplazar el tag en el archivo docker-compose.yml
+            def updatedComposeFile = composeFile.replaceAll(
+                "${imagePrefix}-${serviceName}:\\S+", 
+                "${imagePrefix}-${serviceName}:${docker_image_tag}"
+            )
 
-            // Escribe el archivo actualizado
+            // Escribir el archivo actualizado
             writeFile file: composeFilePath, text: updatedComposeFile
-
-            // Loggea en Logstash indicando éxito
-            logToLogstash('INFO', "Tags en docker-compose.yml actualizados con éxito", host, port)
+            logToLogstash('INFO', "Archivo docker-compose.yml actualizado con el tag ${docker_image_tag}", host, port)
         } catch (Exception e) {
-            logToLogstash('ERROR', "Error al actualizar tags en docker-compose.yml: ${e.message}", host, port)
+            logToLogstash('ERROR', "Error al actualizar docker-compose.yml: ${e.message}", host, port)
             throw e
         }
     }
+
 
 
 
