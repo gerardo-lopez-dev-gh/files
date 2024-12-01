@@ -115,7 +115,17 @@
 
                             deploymentData.repos.each { repo ->
                                 if (repo.build) {
-                                    def directories = repo.dockerfileDirs ? (repo.dockerfileDirs instanceof List ? repo.dockerfileDirs : [repo.dockerfileDirs]) : [repo.dir]
+                                    def directories = repo.dockerfileDirs ? 
+                                        (repo.dockerfileDirs instanceof List ? repo.dockerfileDirs : [repo.dockerfileDirs]) 
+                                        : [repo.dir]
+
+                                    // Generar el tag de la imagen al nivel del repositorio
+                                    def commitHash = getGitCommitHash(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
+                                    def currentDate = getCurrentDate(deploymentData.logstash.host, deploymentData.logstash.port)
+                                    def docker_image_tag = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
+
+                                    logToLogstash('INFO', "Tag de la imagen Docker generado: ${docker_image_tag}", deploymentData.logstash.host, deploymentData.logstash.port)
+
                                     directories.each { dockerfileDir ->
                                         def cleanServiceName = dockerfileDir == "." ? 'root' : dockerfileDir.replaceAll(/[^a-zA-Z0-9_-]/, '')
                                         def dockerfilePath = repo.dockerfileDirs 
@@ -127,11 +137,6 @@
                                             error("Dockerfile no encontrado en ${dockerfilePath}")
                                         }
 
-                                        def commitHash = getGitCommitHash(repo.dir, deploymentData.logstash.host, deploymentData.logstash.port)
-                                        def currentDate = getCurrentDate(deploymentData.logstash.host, deploymentData.logstash.port)
-                                        def docker_image_tag = "${currentDate}_${commitHash}".replaceAll(/[^a-zA-Z0-9._-]/, '')
-
-                                        logToLogstash('INFO', "Tag de la imagen Docker generado: ${docker_image_tag}", deploymentData.logstash.host, deploymentData.logstash.port)
                                         logToLogstash('INFO', "Generando y publicando imagen Docker para ${deploymentData.docker.imagePrefix}/${dockerfileDir}", deploymentData.logstash.host, deploymentData.logstash.port)
 
                                         try {
@@ -160,14 +165,22 @@
 
                                     stopExistingContainers(deploymentData.logstash.host, deploymentData.logstash.port)
 
-                                    deleteOldDockerImages(
-                                        deploymentData.docker.registry,
-                                        deploymentData.docker.imagePrefix,
-                                        deploymentData,
-                                        deploymentData.logstash.host,
-                                        deploymentData.logstash.port,
-                                        docker_image_tag
-                                    )
+                                    // Usar el mismo docker_image_tag para la eliminación de imágenes antiguas
+                                    try {
+                                        logToLogstash('INFO', "Comenzamos con el delete", deploymentData.logstash.host, deploymentData.logstash.port)
+                                        deleteOldDockerImages(
+                                            deploymentData.docker.registry,
+                                            deploymentData.docker.imagePrefix,
+                                            deploymentData,
+                                            deploymentData.logstash.host,
+                                            deploymentData.logstash.port,
+                                            docker_image_tag
+                                        )
+                                    } catch (Exception e) {
+                                        logToLogstash('ERROR', "Error antes de llamar a deleteOldDockerImages: ${e.message}", deploymentData.logstash.host, deploymentData.logstash.port)
+                                        error("Error antes de llamar a deleteOldDockerImages")
+                                    }
+
                                 } else {
                                     logToLogstash('INFO', "Saltando publicación de imágenes Docker para ${repo.dir}", deploymentData.logstash.host, deploymentData.logstash.port)
                                 }
@@ -181,6 +194,7 @@
                     }
                 }
             }
+
 
 
 
