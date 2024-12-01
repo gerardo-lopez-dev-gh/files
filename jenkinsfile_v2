@@ -463,6 +463,7 @@
 
     def startNewDeployment(repoDir, host, port) {
         try {
+            logToLogstash('INFO', "docker compose -f  ${repoDir}/docker-compose.yml up -d", host, port)
             sh "docker compose -f  ${repoDir}/docker-compose.yml up -d"
             logToLogstash('INFO', "Nuevo despliegue iniciado con éxito", host, port)
         } catch (Exception e) {
